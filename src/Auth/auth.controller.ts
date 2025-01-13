@@ -14,7 +14,7 @@ export class AuthController {
 
   @HttpCode(HttpStatus.OK)
   @Post('signin')
-  async signIn(@Body() userData: Partial<User>): Promise<User> {
+  async signIn(@Body() userData: Partial<User>): Promise<{ access_token: string }> { // Modifique a tipagem
     return this.authService.signIn(userData.email, userData.password);
   }
 }

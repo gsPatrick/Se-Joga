@@ -24,11 +24,14 @@ import { GeneratedNumber } from './models/generated-number.model';
 import { BlockchainHash } from './models/blockchain-hash.model'; // Importe o modelo
 import { Seed } from './models/seed.model'; // Importe o modelo
 
+
+
 import { AuthModule } from './auth/auth.module';
-import { RaffleModule } from './Raffle/raffle.module';
+import { RaffleModule } from './Raflle/raffle.module';
 import { HashModule } from './hash/hash.module';
 import { SeedModule } from './seed/seed.module';
 import { ScheduleModule } from '@nestjs/schedule';
+
 
 
 @Module({
@@ -38,7 +41,7 @@ import { ScheduleModule } from '@nestjs/schedule';
       host: 'localhost',
       port: 5432,
       username: 'postgres',
-      password: 'patrick',
+      password: '123',
       database: 'seJoga',
       models: [
         User,

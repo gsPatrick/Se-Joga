@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Seed } from '../models/seed.model';
-import { createCipheriv } from 'crypto';
+import { createCipheriv, createHash } from 'crypto';
 import { GeneratedNumber } from '../models/generated-number.model';
+import { BlockchainHash } from 'src/models/blockchain-hash.model';
 
 @Injectable()
 export class SeedService {
@@ -14,19 +15,23 @@ export class SeedService {
     private generatedNumberModel: typeof GeneratedNumber,
   ) {}
 
+      // Função auxiliar para gerar uma chave de 32 bytes a partir do hash
+    private generateKeyFromHash(hash: string): Buffer {
+        // Usar SHA-256 para gerar uma chave de 32 bytes a partir do hash
+        return createHash('sha256').update(hash).digest();
+    }
+
   async getNextRandomNumber(seed: string, sequence: number): Promise<number> {
     const algorithm = 'aes-256-cbc';
-    const key = Buffer.from(seed, 'hex');
-    const iv = Buffer.alloc(16, 0); // IV de 16 bytes (128 bits) para AES, preenchido com zeros
+    const key = this.generateKeyFromHash(seed);
+    const iv = Buffer.alloc(16, 0);
 
-    // Criptografar o número de sequência usando AES-256-CBC
     const cipher = createCipheriv(algorithm, key, iv);
     const encrypted = Buffer.concat([
       cipher.update(Buffer.from(sequence.toString())),
       cipher.final(),
     ]);
 
-    // Gerar um número a partir do resultado criptografado
     const randomNumber = encrypted.readUInt32LE(0);
 
     return randomNumber;
@@ -34,12 +39,12 @@ export class SeedService {
 
   async createSeed(hashId: number, seedString: string): Promise<Seed> {
     try {
-      // Cria uma seed vazia associada ao hashId
+      // Cria uma seed associada ao hashId
       const seed = await this.seedModel.create({
         hashId,
-        seed: '', // A seed agora é uma string vazia
+        seed: seedString, // Pode ser uma string vazia inicialmente
       });
-      this.logger.log(`Seed vazia criada com sucesso para o hashId ${hashId}`);
+      this.logger.log(`Seed criada com sucesso para o hashId ${hashId}`);
       return seed;
     } catch (error) {
       this.logger.error(
@@ -49,29 +54,35 @@ export class SeedService {
       throw error;
     }
   }
-
-  // async findSeedByValue(seedValue: string): Promise<Seed | null> {
-  //   return this.seedModel.findOne({ where: { seed: seedValue } });
-  // }
-
-
   
   async generateNumbersForSeed(seedId: number): Promise<void> {
     const seedRecord = await this.seedModel.findByPk(seedId);
     if (!seedRecord) {
-        throw new Error(`Seed com ID ${seedId} não encontrada.`);
+      throw new Error(`Seed com ID ${seedId} não encontrada.`);
     }
-    const hash = seedRecord.seed;
-    for (let i = 0; i < 5000; i++) {
-        try {
-            const number = await this.getNextRandomNumber(hash, i);
-            await this.createGeneratedNumber(seedId, number, i);
-        } catch (error) {
-            this.logger.error(`Erro ao gerar ou armazenar número na iteração ${i}: ${error.message}`, error.stack);
-            break;
-        }
+
+    const seedString = seedRecord.seed;
+
+    if (!seedString) {
+      this.logger.warn(
+        `SeedString vazia para seedId ${seedId}. A geração de números será ignorada.`,
+      );
+      return;
     }
-}
+
+    const numbers = seedString.split(',').map(Number);
+    for (let i = 0; i < numbers.length; i++) {
+      try {
+        await this.createGeneratedNumber(seedId, numbers[i], i);
+      } catch (error) {
+        this.logger.error(
+          `Erro ao armazenar número na iteração ${i}: ${error.message}`,
+          error.stack,
+        );
+        break;
+      }
+    }
+  }
 
 async createGeneratedNumber(seedId: number, number: number, sequence: number): Promise<GeneratedNumber> {
   try {
@@ -88,10 +99,6 @@ async createGeneratedNumber(seedId: number, number: number, sequence: number): P
   }
 }
 
-// src/seed/seed.service.ts
-
-// ...
-
 async findSeedByValue(seedValue: string): Promise<Seed | null> {
   this.logger.debug(`Buscando seed pelo valor: ${seedValue}`);
   const seed = await this.seedModel.findOne({ where: { seed: seedValue } });
@@ -103,8 +110,9 @@ async findSeedByValue(seedValue: string): Promise<Seed | null> {
   return seed;
 }
 
-async findSeedById(hashId: number): Promise<Seed> {
-  return this.seedModel.findOne({ where: { hashId } });
+async findSeedById(id: number): Promise<Seed> {
+    return this.seedModel.findByPk(id, {
+        include: [{ model: BlockchainHash }],
+      });
 }
 }
-

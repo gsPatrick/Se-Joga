@@ -4,16 +4,18 @@ import { InjectModel } from '@nestjs/sequelize';
 import { User, UserRole } from '../models/user/user.model';
 import * as bcrypt from 'bcrypt';
 import { Op } from 'sequelize';
+import { JwtService } from '@nestjs/jwt';
 
 @Injectable()
 export class AuthService {
   constructor(
     @InjectModel(User)
     private userModel: typeof User,
+    private jwtService: JwtService, // Injete o JwtService no construtor
   ) {}
 
   async signUp(userData: Partial<User>): Promise<User> {
-    const { name, email, cpf, phone, password } = userData;
+    const { name, email, cpf, phone, password, balance } = userData; // Adiciona balance aqui
 
     // Verificar se o usuário já existe (por email ou CPF)
     const existingUser = await this.userModel.findOne({
@@ -27,7 +29,7 @@ export class AuthService {
     }
 
     // Criptografar a senha
-    const hashedPassword = await bcrypt.hash(password, 10); // 10 é o saltRounds, um bom valor padrão
+    const hashedPassword = await bcrypt.hash(password, 10);
 
     // Criar o usuário
     const newUser = await this.userModel.create({
@@ -37,26 +39,30 @@ export class AuthService {
       phone,
       password: hashedPassword,
       role: UserRole.USER, // Define o role como USER
+      balance: balance || 0, // Define o balance se fornecido, senão usa 0
     });
 
     return newUser;
   }
 
-  async signIn(email: string, pass: string): Promise<User> {
+  async signIn(email: string, pass: string): Promise<{ access_token: string }> { // Modifique a tipagem
     const user = await this.userModel.findOne({ where: { email } });
 
     if (!user) {
-        throw new UnauthorizedException('Invalid credentials.');
-      }
+      throw new UnauthorizedException('Invalid credentials.');
+    }
 
     const isMatch = await bcrypt.compare(pass, user.password);
 
     if (!isMatch) {
-        throw new UnauthorizedException('Invalid credentials.');
-      }
+      throw new UnauthorizedException('Invalid credentials.');
+    }
 
-    return user;
-    
+    // Gerar o token JWT
+    const payload = { sub: user.id, email: user.email }; // Defina o payload do token (sub é o ID do usuário, por convenção)
+    return {
+      access_token: this.jwtService.sign(payload), // Retorna um objeto com o token
+    };
   }
 
   async updateUserBalance(userId: number, amount: number): Promise<User> {

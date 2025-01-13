@@ -4,6 +4,7 @@ import axios from 'axios';
 import { BlockchainHash } from '../models/blockchain-hash.model';
 import { SeedService } from '../seed/seed.service';
 import { GeneratedNumber } from '../models/generated-number.model';
+import { createHash } from 'crypto';
 
 @Injectable()
 export class HashService {
@@ -16,10 +17,10 @@ export class HashService {
     private blockchainHashModel: typeof BlockchainHash,
     private seedService: SeedService,
     @InjectModel(GeneratedNumber)
-    private generatedNumberModel: typeof GeneratedNumber
+    private generatedNumberModel: typeof GeneratedNumber,
   ) {
-    this.updateHash(); // Atualiza o hash na inicialização
-    setInterval(() => this.updateHash(), 600000); // Atualiza o hash a cada 10 minutos (600000 ms)
+    this.updateHash();
+    setInterval(() => this.updateHash(), 600000);
   }
 
   async getLatestHash(): Promise<string> {
@@ -28,7 +29,7 @@ export class HashService {
 
   async getLatestHashId(): Promise<number> {
     const latestHash = await this.blockchainHashModel.findOne({
-      order: [['timestamp', 'DESC']], // Ordena por timestamp decrescente para pegar o mais recente
+      order: [['timestamp', 'DESC']],
     });
 
     if (!latestHash) {
@@ -58,8 +59,12 @@ export class HashService {
         this.lastHashUpdate = Date.now();
         this.logger.log(`Novo hash da blockchain armazenado: ${hash}`);
 
-        // Gerar e armazenar a seed (sequência de números)
-        await this.generateAndStoreSeed(newHash.id, hash);
+        // **1. Criar a seed vazia primeiro**
+        const newSeed = await this.seedService.createSeed(newHash.id, ''); // Passando string vazia
+        this.logger.log(`Seed vazia criada para o hashId ${newHash.id}`);
+
+        // **2. Gerar e armazenar a seed (sequência de números) DEPOIS de criar a seed vazia**
+        await this.generateAndStoreSeed(newSeed.id, hash);
       } else {
         this.latestHash = existingHash.hash;
         this.lastHashUpdate = existingHash.timestamp.getTime();
@@ -75,11 +80,10 @@ export class HashService {
     }
   }
 
-  private async generateAndStoreSeed(hashId: number, hash: string) {
-    this.logger.debug(`Gerando seed para o hashId: ${hashId}, hash: ${hash}`);
+  private async generateAndStoreSeed(seedId: number, hash: string) {
+    this.logger.debug(`Gerando seed para o seedId: ${seedId}, hash: ${hash}`);
     const numbers: number[] = [];
     for (let i = 0; i < 5000; i++) {
-      // Agora gera 5000 números
       try {
         const number = await this.seedService.getNextRandomNumber(hash, i);
         numbers.push(number);
@@ -95,15 +99,32 @@ export class HashService {
     // Converter o array de números em uma string separada por vírgulas
     const seedString = numbers.join(',');
 
-    // Criar a seed no banco de dados
     try {
-      await this.seedService.createSeed(hashId, seedString);
-      this.logger.log(`Seed gerada e armazenada para o hashId ${hashId}`);
+      // **3. Atualizar a seed existente com a string gerada**
+      const seed = await this.seedService.findSeedById(seedId); // Usar seedId, não hashId
+      if (seed) {
+        seed.seed = seedString;
+        await seed.save();
+        this.logger.log(`Seed gerada e armazenada para o seedId ${seedId}`);
+
+        // **4. Gerar e salvar os GeneratedNumbers APÓS salvar a seed completa**
+        await this.seedService.generateNumbersForSeed(seedId);
+      } else {
+        this.logger.error(
+          `Seed com seedId ${seedId} não encontrada para atualização.`,
+        );
+      }
     } catch (error) {
       this.logger.error(
-        `Erro ao armazenar a seed para o hashId ${hashId}: ${error.message}`,
+        `Erro ao armazenar a seed para o seedId ${seedId}: ${error.message}`,
         error.stack,
       );
     }
   }
-}
+
+    // Função auxiliar para gerar uma chave de 32 bytes a partir do hash
+    private generateKeyFromHash(hash: string): Buffer {
+        // Usar SHA-256 para gerar uma chave de 32 bytes a partir do hash
+        return createHash('sha256').update(hash).digest();
+    }
+    }

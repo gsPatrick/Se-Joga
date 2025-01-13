@@ -31,7 +31,7 @@ import {
       type: DataType.BIGINT, // Use BIGINT para armazenar números grandes
       allowNull: false,
     })
-    number: number;
+    number: bigint; // Alterado para bigint
   
     @Column({
       type: DataType.INTEGER,
