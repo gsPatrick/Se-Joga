@@ -43,4 +43,5 @@ export class DiceRound extends Model {
 
   @HasMany(() => DiceBet)
   bets: DiceBet[];
+    diceRoundSeed: any;
 }

@@ -21,6 +21,13 @@ export class Raffle extends Model {
   id: number;
 
   @Column({
+    type: DataType.ENUM('tradicional', 'equipes'), // Novo campo para o tipo de rifa
+    allowNull: false,
+    defaultValue: 'tradicional', // Padrão para manter a funcionalidade anterior
+  })
+  type: string;
+
+  @Column({
     type: DataType.STRING,
     allowNull: false,
     unique: true,

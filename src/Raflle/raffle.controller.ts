@@ -30,17 +30,42 @@ export class RaffleController {
     }
   
     // Endpoint para comprar bilhetes (SEM PROTEÇÃO)
-    @Post(':raffleId/buy')
+    @UseGuards(AuthGuard('jwt'))
+    @Post(':raffleId/buy-tickets')
     async buyRaffleTickets(
-      @Param('raffleId', ParseIntPipe) raffleId: number,
-      @Body('userId', ParseIntPipe) userId: number, // Agora você precisa passar o userId no corpo da requisição
-      @Body('quantity', ParseIntPipe) quantity: number,
+        @Param('raffleId', ParseIntPipe) raffleId: number,
+        @Request() req,
+        @Body('ticketNumbers') ticketNumbers: string[],
+        @Body('type') type: 'tradicional' | 'equipes' = 'tradicional'
     ) {
-      this.logger.log(
-        `Usuário ${userId} tentando comprar ${quantity} bilhetes para a rifa ${raffleId}...`,
-      );
-      return await this.raffleService.buyRaffleTickets(userId, raffleId, quantity);
+        const userId = req.user.id;
+        this.logger.log(
+        `Usuário ${userId} tentando comprar os bilhetes ${ticketNumbers.join(
+            ', ',
+        )} para a rifa ${raffleId} do tipo ${type}...`,
+        );
+        return await this.raffleService.buyRaffleTickets(
+        userId,
+        raffleId,
+        { type, quantityOrNumbers: ticketNumbers },
+        );
     }
+
+    @UseGuards(AuthGuard('jwt'))
+    @Post(':raffleId/buy-random')
+    async buyRandomRaffleTickets(
+        @Param('raffleId', ParseIntPipe) raffleId: number,
+        @Request() req,
+        @Body('quantity', ParseIntPipe) quantity: number,
+        @Body('type') type: 'tradicional' | 'equipes' = 'tradicional',
+    ) {
+        const userId = req.user.id;
+        this.logger.log(
+        `Usuário ${userId} tentando comprar ${quantity} bilhetes aleatórios para a rifa ${raffleId} do tipo ${type}...`,
+        );
+        return await this.raffleService.buyRaffleTickets(userId, raffleId, { type, quantityOrNumbers: quantity });
+    }
+
 
     @Get()
     async getRafflesWithDetails() {
@@ -142,5 +167,32 @@ export class RaffleController {
         };
       });
       }
+
+      @UseGuards(AuthGuard('jwt'))
+      @Get('my/data')
+      async getUserRaffleData(@Request() req) {
+        const userId = req.user.id;
+        this.logger.log(`Buscando todos os dados do usuário ${userId} relacionados à rifas...`);
+        return await this.raffleService.getUserRaffleData(userId);
+      }
+
+      @Post('team/system')
+      async createSystemTeamRaffle() {
+          this.logger.log('Criando rifa de equipes do sistema...');
+          return await this.raffleService.createTeamRaffle();
+      }
+  
+      @Post(':raffleId/finalize-team')
+      @HttpCode(HttpStatus.OK)
+      async finalizeTeamRaffle(@Param('raffleId', ParseIntPipe) raffleId: number) {
+          this.logger.log(`Finalizando rifa de equipes ${raffleId} (endpoint manual)...`);
+          return await this.raffleService.finalizeTeamRaffle(raffleId);
+      }
+
+      @Get(':raffleId/teams')
+      async getRaffleTeams(@Param('raffleId', ParseIntPipe) raffleId: number) {
+          this.logger.log(`Buscando equipes da rifa ${raffleId}...`);
+          return await this.raffleService.getRaffleTeams(raffleId);
+      }  
 
 }

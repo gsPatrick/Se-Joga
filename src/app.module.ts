@@ -25,12 +25,12 @@ import { BlockchainHash } from './models/blockchain-hash.model'; // Importe o mo
 import { Seed } from './models/seed.model'; // Importe o modelo
 
 
-
 import { AuthModule } from './auth/auth.module';
 import { RaffleModule } from './Raflle/raffle.module';
 import { HashModule } from './hash/hash.module';
 import { SeedModule } from './seed/seed.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { DiceModule } from './dice/dice.module';
 
 
 
@@ -75,6 +75,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     HashModule,
     SeedModule,
     RaffleModule,
+    DiceModule,
     ScheduleModule.forRoot(),
   ],
   // ...

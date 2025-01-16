@@ -1,8 +1,15 @@
-import { Table, Column, Model, DataType, ForeignKey, BelongsTo } from 'sequelize-typescript';
+import {
+  Table,
+  Column,
+  Model,
+  DataType,
+  ForeignKey,
+  BelongsTo,
+} from 'sequelize-typescript';
 import { User } from '../user/user.model';
 import { DiceRound } from './dice-round.model';
 
-@Table
+@Table({ tableName: 'dice_bets' }) // Adicionando tableName para garantir
 export class DiceBet extends Model {
   @Column({
     type: DataType.INTEGER,
@@ -42,6 +49,18 @@ export class DiceBet extends Model {
     allowNull: false,
   })
   betAmount: number;
+
+  @Column({
+    type: DataType.BOOLEAN,
+    allowNull: false,
+  })
+  win: boolean; // Resultado da aposta (true se ganhou, false se perdeu)
+
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: false,
+  })
+  generatedNumber: number; // Número gerado pelo sistema
 
   @Column({
     type: DataType.DATE,
