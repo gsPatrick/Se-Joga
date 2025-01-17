@@ -31,23 +31,6 @@ export class RouletteBet extends Model {
   @BelongsTo(() => RouletteRound)
   round: RouletteRound;
 
-  @Column({
-    type: DataType.INTEGER,
-    allowNull: false,
-  })
-  betNumber: number;
-
-  @Column({
-    type: DataType.ENUM('RED', 'BLACK', 'GREEN'),
-    allowNull: true,
-  })
-  betColor: string;
-
-  @Column({
-    type: DataType.INTEGER,
-    allowNull: true,
-  })
-  betColumn: number;
 
   @Column({
     type: DataType.DECIMAL(10, 2),
@@ -61,4 +44,40 @@ export class RouletteBet extends Model {
     defaultValue: DataType.NOW,
   })
   createdAt: Date;
+
+  @Column({
+    type: DataType.ENUM(
+      'NUMBER',
+      'COLOR',
+      'COLUMN',
+      'DOZEN',
+      'ODD_EVEN',
+    ),
+    allowNull: false,
+  })
+  betType: string;
+
+  @Column({
+    type: DataType.STRING, // Pode ser um número (como string) ou uma string (RED, BLACK, 1, 2, 3, ODD, EVEN)
+    allowNull: false,
+  })
+  betChoice: string; //  Armazena a escolha específica do usuário
+
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+  })
+  betNumber: number; //  Agora não é mais obrigatorio
+
+  @Column({
+    type: DataType.ENUM('RED', 'BLACK', 'GREEN'),
+    allowNull: true,
+  })
+  betColor: string; // Agora não é mais obrigatorio
+
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true,
+  })
+  betColumn: number; // Agora não é mais obrigatorio
 }

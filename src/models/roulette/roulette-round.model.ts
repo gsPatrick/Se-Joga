@@ -14,7 +14,7 @@ export class RouletteRound extends Model {
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
-    allowNull: false,
+    allowNull: true,
   })
   createdBy: number;
 
@@ -40,12 +40,20 @@ export class RouletteRound extends Model {
   winningColor: string;
 
   @Column({
-    type: DataType.DATE,
+    type: DataType.ENUM('banca', 'sala'), // Tipo de roleta
     allowNull: false,
+    defaultValue: 'banca', // Pode definir um valor padrão
+  })
+  type: string;
+
+  @Column({
+    type: DataType.DATE,
+    allowNull: true,
     defaultValue: DataType.NOW,
   })
   createdAt: Date;
 
   @HasMany(() => RouletteBet)
   bets: RouletteBet[];
+    finished: any;
 }

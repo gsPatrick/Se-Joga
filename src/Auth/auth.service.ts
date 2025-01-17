@@ -82,4 +82,54 @@ export class AuthService {
     return user;
   }
 
+  async findAllUsers(): Promise<User[]> {
+    return this.userModel.findAll();
+  }
+
+  async findCurrentUser(userId: number): Promise<User> {
+    const user = await this.userModel.findByPk(userId, {
+      attributes: { exclude: ['password'] }, // Exclui a senha do retorno
+    });
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+    return user;
+  }
+
+  async updateUser(userId: number, userData: Partial<User>): Promise<User> {
+    const user = await this.userModel.findByPk(userId);
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+
+    // Impedir a atualização de senha e do balance por essa rota
+    if (userData.password) {
+        throw new BadRequestException('A senha não pode ser atualizada por esta rota.');
+    }
+    if (userData.balance !== undefined) {
+        throw new BadRequestException('O saldo não pode ser atualizado por esta rota.');
+    }
+
+    await user.update(userData);
+    return user;
+  }
+
+  async updateBalance(userId: number, amount: number): Promise<User> {
+    const user = await this.userModel.findByPk(userId);
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+
+    const newBalance = Number(user.balance) + Number(amount);
+
+    if (newBalance < 0) {
+      throw new BadRequestException('Saldo insuficiente.');
+    }
+
+    user.balance = newBalance;
+    await user.save();
+
+    return user;
+  }
+
 }

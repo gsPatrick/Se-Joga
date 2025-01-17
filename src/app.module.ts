@@ -23,6 +23,8 @@ import { RaffleNumber } from './models/raffle/raffle-number.model';
 import { GeneratedNumber } from './models/generated-number.model';
 import { BlockchainHash } from './models/blockchain-hash.model'; // Importe o modelo
 import { Seed } from './models/seed.model'; // Importe o modelo
+import { OddUtils } from './Utils/odd.utils';
+
 
 
 import { AuthModule } from './auth/auth.module';
@@ -31,6 +33,10 @@ import { HashModule } from './hash/hash.module';
 import { SeedModule } from './seed/seed.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { DiceModule } from './dice/dice.module';
+import { RouletteModule } from './roulette/roulette.module';
+import { UtilsModule } from './utils/utils.module';
+
+
 
 
 
@@ -67,6 +73,7 @@ import { DiceModule } from './dice/dice.module';
         GeneratedNumber,
         BlockchainHash, // Adicione o modelo
         Seed, // Adicione o modelo
+
       ],
       autoLoadModels: true,
       synchronize: true,
@@ -76,8 +83,12 @@ import { DiceModule } from './dice/dice.module';
     SeedModule,
     RaffleModule,
     DiceModule,
+    RouletteModule,
+    UtilsModule,
     ScheduleModule.forRoot(),
   ],
+
+
   // ...
 })
 export class AppModule {}
