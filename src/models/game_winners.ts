@@ -25,30 +25,30 @@ import {
       autoIncrement: true,
       primaryKey: true,
     })
-    id: number;
+    id!: number;
   
     @Column({
       type: DataType.ENUM,
       values: Object.values(GameType),
       allowNull: false,
     })
-    game: GameType;
+    game!: GameType;
   
     @Column({
       type: DataType.INTEGER, // Ajuste conforme a necessidade para cada jogo
       allowNull: false,
     })
-    roundId: number;
+    roundId!: number;
   
     @ForeignKey(() => User)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    userId: number;
+    userId!: number;
   
     @BelongsTo(() => User)
-    user: User;
+    user!: User;
   
     @Column({
       type: DataType.JSON,
@@ -61,5 +61,5 @@ import {
       allowNull: false,
       defaultValue: DataType.NOW,
     })
-    createdAt: Date;
+    createdAt!: Date;
   }

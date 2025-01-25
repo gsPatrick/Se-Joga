@@ -16,45 +16,45 @@ export class RaffleTicket extends Model { // A classe está sendo exportada aqui
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  userId: number;
+  userId!: number;
 
   @BelongsTo(() => User)
-  user: User;
+  user!: User;
 
   @ForeignKey(() => Raffle)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  raffleId: number;
+  raffleId!: number;
 
   @BelongsTo(() => Raffle)
-  raffle: Raffle;
+  raffle!: Raffle;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  ticketNumber: string;
+  ticketNumber!: string;
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
     defaultValue: DataType.NOW,
   })
-  createdAt: Date;
+  createdAt!: Date;
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
     defaultValue: DataType.NOW,
   })
-  updatedAt: Date;
+  updatedAt!: Date;
 }

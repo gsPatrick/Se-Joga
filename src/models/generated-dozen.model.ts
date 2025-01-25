@@ -15,28 +15,28 @@ import {
       autoIncrement: true,
       primaryKey: true,
     })
-    id: number;
+    id!: number;
   
     @ForeignKey(() => GeneratedNumber)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    generatedNumberId: number;
+    generatedNumberId!: number;
   
     @BelongsTo(() => GeneratedNumber)
-    generatedNumber: GeneratedNumber;
+    generatedNumber!: GeneratedNumber;
   
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    dozen: number;
+    dozen!: number;
   
     @Column({
       type: DataType.DATE,
       allowNull: false,
       defaultValue: DataType.NOW,
     })
-    createdAt: Date;
+    createdAt!: Date;
   }

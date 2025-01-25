@@ -16,25 +16,25 @@ import {
       autoIncrement: true,
       primaryKey: true,
     })
-    id: number;
+    id!: number;
   
     @ForeignKey(() => BingoGame)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    gameId: number;
+    gameId!: number;
   
     @BelongsTo(() => BingoGame)
-    bingoGame: BingoGame;
+    bingoGame!: BingoGame;
   
     @ForeignKey(() => Seed)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    seedId: number;
+    seedId!: number;
   
     @BelongsTo(() => Seed)
-    seed: Seed;
+    seed!: Seed;
   }

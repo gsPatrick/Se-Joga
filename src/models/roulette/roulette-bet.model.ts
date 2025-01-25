@@ -9,41 +9,41 @@ export class RouletteBet extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  userId: number;
+  userId!: number;
 
   @BelongsTo(() => User)
-  user: User;
+  user!: User;
 
   @ForeignKey(() => RouletteRound)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  roundId: number;
+  roundId!: number;
 
   @BelongsTo(() => RouletteRound)
-  round: RouletteRound;
+  round!: RouletteRound;
 
 
   @Column({
     type: DataType.DECIMAL(10, 2),
     allowNull: false,
   })
-  betAmount: number;
+  betAmount!: number;
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
     defaultValue: DataType.NOW,
   })
-  createdAt: Date;
+  createdAt!: Date;
 
   @Column({
     type: DataType.ENUM(
@@ -55,29 +55,29 @@ export class RouletteBet extends Model {
     ),
     allowNull: false,
   })
-  betType: string;
+  betType!: string;
 
   @Column({
     type: DataType.STRING, // Pode ser um número (como string) ou uma string (RED, BLACK, 1, 2, 3, ODD, EVEN)
     allowNull: false,
   })
-  betChoice: string; //  Armazena a escolha específica do usuário
+  betChoice!: string; //  Armazena a escolha específica do usuário
 
   @Column({
     type: DataType.INTEGER,
     allowNull: true,
   })
-  betNumber: number; //  Agora não é mais obrigatorio
+  betNumber!: number; //  Agora não é mais obrigatorio
 
   @Column({
     type: DataType.ENUM('RED', 'BLACK', 'GREEN'),
     allowNull: true,
   })
-  betColor: string; // Agora não é mais obrigatorio
+  betColor!: string; // Agora não é mais obrigatorio
 
   @Column({
     type: DataType.INTEGER,
     allowNull: true,
   })
-  betColumn: number; // Agora não é mais obrigatorio
+  betColumn!: number; // Agora não é mais obrigatorio
 }

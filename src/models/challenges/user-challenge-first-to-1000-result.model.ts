@@ -9,25 +9,25 @@ export class UserChallengeFirstTo1000Result extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => UserChallenge)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  userChallengeId: number;
+  userChallengeId!: number;
 
   @BelongsTo(() => UserChallenge)
-  userChallenge: UserChallenge;
+  userChallenge!: UserChallenge;
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
     defaultValue: 0,
   })
-  totalPoints: number;
+  totalPoints!: number;
 
   @HasMany(() => UserChallengeFirstTo1000Round)
-  rounds: UserChallengeFirstTo1000Round[];
+  rounds!: UserChallengeFirstTo1000Round[];
 }

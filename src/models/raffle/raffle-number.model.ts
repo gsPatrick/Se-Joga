@@ -16,32 +16,32 @@ import {
       autoIncrement: true,
       primaryKey: true,
     })
-    id: number;
+    id!: number;
   
     @ForeignKey(() => Raffle)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    raffleId: number;
+    raffleId!: number;
   
     @BelongsTo(() => Raffle)
-    raffle: Raffle;
+    raffle!: Raffle;
   
     @ForeignKey(() => GeneratedNumber)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    numberId: number;
+    numberId!: number;
   
     @BelongsTo(() => GeneratedNumber)
-    generatedNumber: GeneratedNumber;
+    generatedNumber!: GeneratedNumber;
   
     @Column({
       type: DataType.DATE,
       allowNull: false,
       defaultValue: DataType.NOW,
     })
-    createdAt: Date;
+    createdAt!: Date;
   }

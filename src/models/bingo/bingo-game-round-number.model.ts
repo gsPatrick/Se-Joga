@@ -9,25 +9,25 @@ export class BingoGameRoundNumber extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => BingoGameRound)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  bingoGameRoundId: number;
+  bingoGameRoundId!: number;
 
   @BelongsTo(() => BingoGameRound)
-  bingoGameRound: BingoGameRound;
+  bingoGameRound!: BingoGameRound;
 
   @ForeignKey(() => BingoNumber)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  bingoNumberId: number;
+  bingoNumberId!: number;
 
   @BelongsTo(() => BingoNumber)
-  bingoNumber: BingoNumber;
+  bingoNumber!: BingoNumber;
 }

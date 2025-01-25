@@ -15,34 +15,34 @@ import {
       autoIncrement: true,
       primaryKey: true,
     })
-    id: number;
+    id!: number;
   
     @ForeignKey(() => Seed)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    seedId: number;
+    seedId!: number;
   
     @BelongsTo(() => Seed)
-    seed: Seed;
+    seed!: Seed;
   
     @Column({
       type: DataType.BIGINT, // Use BIGINT para armazenar números grandes
       allowNull: false,
     })
-    number: bigint; // Alterado para bigint
+    number!: bigint; // Alterado para bigint
   
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    sequence: number;
+    sequence!: number;
   
     @Column({
       type: DataType.DATE,
       allowNull: false,
       defaultValue: DataType.NOW,
     })
-    createdAt: Date;
+    createdAt!: Date;
   }

@@ -18,6 +18,9 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @Post('signin')
   async signIn(@Body() userData: Partial<User>): Promise<{ access_token: string }> {
+    if (!userData.email || !userData.password) {
+      throw new BadRequestException('Email and password are required');
+    }
     return this.authService.signIn(userData.email, userData.password);
   }
 

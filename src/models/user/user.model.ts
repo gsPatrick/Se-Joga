@@ -24,46 +24,46 @@ export class User extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  name: string;
+  name!: string;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
     unique: true,
   })
-  email: string;
+  email!: string;
 
   @Column({
     type: DataType.STRING(14),
     allowNull: false,
     unique: true,
   })
-  cpf: string;
+  cpf!: string;
 
   @Column({
     type: DataType.STRING(15),
     allowNull: false,
   })
-  phone: string;
+  phone!: string;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  password: string; // Lembre-se de criptografar a senha!
+  password!: string; // Lembre-se de criptografar a senha!
 
   @Column({
     type: DataType.DECIMAL(10, 2),
     allowNull: false,
     defaultValue: 0,
   })
-  balance: number;
+  balance!: number;
 
   @Column({
     type: DataType.ENUM,
@@ -71,43 +71,43 @@ export class User extends Model {
     allowNull: false,
     defaultValue: UserRole.USER,
   })
-  role: UserRole;
+  role!: UserRole;
 
   // Relacionamentos para usuários comuns:
   @HasMany(() => RaffleTicket)
-  raffleTickets: RaffleTicket[];
+  raffleTickets!: RaffleTicket[];
 
   @HasMany(() => RouletteBet)
-  rouletteBets: RouletteBet[];
+  rouletteBets!: RouletteBet[];
 
   @HasMany(() => SlotMachineBet)
-  slotMachineBets: SlotMachineBet[];
+  slotMachineBets!: SlotMachineBet[];
 
   @HasMany(() => BingoCard)
-  bingoCards: BingoCard[];
+  bingoCards!: BingoCard[];
 
   @HasMany(() => DiceBet)
-  diceBets: DiceBet[];
+  diceBets!: DiceBet[];
 
   @HasMany(() => UserChallenge)
-  userChallenges: UserChallenge[];
+  userChallenges!: UserChallenge[];
 
   // Relacionamentos para administradores (usando o mesmo modelo User):
   @HasMany(() => Raffle, { foreignKey: 'createdBy' })
-  createdRaffles: Raffle[];
+  createdRaffles!: Raffle[];
 
   @HasMany(() => RouletteRound, { foreignKey: 'createdBy' })
-  createdRouletteRounds: RouletteRound[];
+  createdRouletteRounds!: RouletteRound[];
 
   @HasMany(() => SlotMachineRound, { foreignKey: 'createdBy' })
-  createdSlotMachineRounds: SlotMachineRound[];
+  createdSlotMachineRounds!: SlotMachineRound[];
 
   @HasMany(() => BingoGame, { foreignKey: 'createdBy' })
-  createdBingoGames: BingoGame[];
+  createdBingoGames!: BingoGame[];
 
   @HasMany(() => DiceRound, { foreignKey: 'createdBy' })
-  createdDiceRounds: DiceRound[];
+  createdDiceRounds!: DiceRound[];
 
   @HasMany(() => Challenge, { foreignKey: 'createdBy' })
-  createdChallenges: Challenge[];
+  createdChallenges!: Challenge[];
 }

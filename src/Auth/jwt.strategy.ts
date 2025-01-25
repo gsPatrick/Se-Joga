@@ -1,28 +1,30 @@
 // src/auth/jwt.strategy.ts
-import { ExtractJwt, Strategy } from 'passport-jwt';
-import { PassportStrategy } from '@nestjs/passport';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { AuthService } from './auth.service';
+import { PassportStrategy } from '@nestjs/passport';
+import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
+import { User } from 'src/models/user/user.model';
+import { AuthService } from './auth.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
-    private authService: AuthService,
-    private configService: ConfigService,
+    private readonly configService: ConfigService,
+    private readonly authService: AuthService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_SECRET'), // Obter a chave secreta do .env
+      secretOrKey: configService.get<string>('JWT_SECRET'),
     });
   }
 
-  async validate(payload: any) {
-    // Aqui você pode buscar o usuário no banco de dados usando o payload.sub (ou payload.userId)
-    // e retornar um objeto mais completo, se necessário.
-
-    // Por enquanto, estamos retornando apenas o ID e o e-mail do usuário:
-    return { id: payload.sub, email: payload.email };
+  async validate(payload: any): Promise<User | null> {
+    try {
+      const user = await this.authService.findCurrentUser(payload.sub);
+      return user;
+    } catch (error) {
+      throw new UnauthorizedException('Não autorizado');
+    }
   }
 }

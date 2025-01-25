@@ -8,27 +8,27 @@ export class UserChallengeFirstTo1000Round extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => UserChallengeFirstTo1000Result)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  resultId: number;
+  resultId!: number;
 
   @BelongsTo(() => UserChallengeFirstTo1000Result)
-  result: UserChallengeFirstTo1000Result;
+  result!: UserChallengeFirstTo1000Result;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  dozens: string; // Ex: "12,45,78,90,34"
+  dozens!: string; // Ex: "12,45,78,90,34"
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  roundPoints: number;
+  roundPoints!: number;
 }

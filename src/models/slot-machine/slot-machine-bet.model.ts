@@ -9,44 +9,44 @@ export class SlotMachineBet extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  userId: number;
+  userId!: number;
 
   @BelongsTo(() => User)
-  user: User;
+  user!: User;
 
   @ForeignKey(() => SlotMachineRound)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  roundId: number;
+  roundId!: number;
 
   @BelongsTo(() => SlotMachineRound)
-  round: SlotMachineRound;
+  round!: SlotMachineRound;
 
   @Column({
     type: DataType.STRING,
     allowNull: true,
   })
-  betSymbol: string; // Você pode usar um ENUM aqui se tiver símbolos predefinidos
+  betSymbol!: string; // Você pode usar um ENUM aqui se tiver símbolos predefinidos
 
   @Column({
     type: DataType.DECIMAL(10, 2),
     allowNull: false,
   })
-  betAmount: number;
+  betAmount!: number;
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
     defaultValue: DataType.NOW,
   })
-  createdAt: Date;
+  createdAt!: Date;
 }

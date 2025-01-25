@@ -8,27 +8,27 @@ export class UserChallengeHighestDozenResult extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => UserChallenge)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  userChallengeId: number;
+  userChallengeId!: number;
 
   @BelongsTo(() => UserChallenge)
-  userChallenge: UserChallenge;
+  userChallenge!: UserChallenge;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  dozens: string; // Ex: "12,45,78,90,34"
+  dozens!: string; // Ex: "12,45,78,90,34"
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  highestDozen: number;
+  highestDozen!: number;
 }

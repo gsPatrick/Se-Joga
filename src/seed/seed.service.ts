@@ -48,8 +48,8 @@ export class SeedService {
       return seed;
     } catch (error) {
       this.logger.error(
-        `createSeed: Erro ao criar seed: ${error.message}`,
-        error.stack,
+        `createSeed: Erro ao criar seed: ${(error as Error).message}`,
+        (error as Error).stack,
       );
       throw error;
     }
@@ -76,8 +76,8 @@ export class SeedService {
         await this.createGeneratedNumber(seedId, numbers[i], i);
       } catch (error) {
         this.logger.error(
-          `Erro ao armazenar número na iteração ${i}: ${error.message}`,
-          error.stack,
+          `Erro ao armazenar número na iteração ${i}: ${(error as Error).message}`,
+          (error as Error).stack,
         );
         break;
       }
@@ -94,7 +94,7 @@ async createGeneratedNumber(seedId: number, number: number, sequence: number): P
     this.logger.debug(`Número ${number} gerado e armazenado para a seedId ${seedId} com sequence ${sequence}`);
     return generatedNumber;
   } catch (error) {
-    this.logger.error(`Erro ao criar generatedNumber: ${error.message}`, error.stack);
+    this.logger.error(`Erro ao criar generatedNumber: ${(error as Error).message}`, (error as Error).stack);
     throw error;
   }
 }
@@ -111,8 +111,12 @@ async findSeedByValue(seedValue: string): Promise<Seed | null> {
 }
 
 async findSeedById(id: number): Promise<Seed> {
-    return this.seedModel.findByPk(id, {
+    const seed = await this.seedModel.findByPk(id, {
         include: [{ model: BlockchainHash }],
       });
+    if (!seed) {
+        throw new Error(`Seed with ID ${id} not found.`);
+    }
+    return seed;
 }
 }

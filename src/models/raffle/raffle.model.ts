@@ -18,21 +18,21 @@ export class Raffle extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @Column({
     type: DataType.ENUM('tradicional', 'equipes'), // Novo campo para o tipo de rifa
     allowNull: false,
     defaultValue: 'tradicional', // Padrão para manter a funcionalidade anterior
   })
-  type: string;
+  type!: string;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
     unique: true,
   })
-  raffleIdentifier: string;
+  raffleIdentifier!: string;
 
 // raffle.model.ts
 @ForeignKey(() => User)
@@ -40,73 +40,73 @@ export class Raffle extends Model {
   type: DataType.INTEGER,
   allowNull: true, // Mude para true
 })
-createdBy: number;
+createdBy!: number;
 
   @BelongsTo(() => User)
-  createdByUser: User;
+  createdByUser!: User;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  title: string;
+  title!: string;
 
   @Column({
     type: DataType.TEXT,
     allowNull: true,
   })
-  description: string;
+  description!: string;
 
   @Column({
     type: DataType.DECIMAL(10, 2),
     allowNull: false,
   })
-  ticketPrice: number;
+  ticketPrice!: number;
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  totalTickets: number;
+  totalTickets!: number;
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
     defaultValue: 0,
   })
-  soldTickets: number;
+  soldTickets!: number;
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
     defaultValue: DataType.NOW,
   })
-  startDate: Date;
+  startDate!: Date;
 
   @Column({
     type: DataType.DATE,
     allowNull: true,
   })
-  endDate: Date;
+  endDate!: Date;
 
   @Column({
     type: DataType.DATE,
     allowNull: true,
   })
-  drawDate: Date;
+  drawDate!: Date;
 
   @Column({
     type: DataType.BOOLEAN,
     allowNull: false,
     defaultValue: false,
   })
-  finished: boolean;
+  finished!: boolean;
 
   @Column({
     type: DataType.STRING,
     allowNull: true,
   })
-  winningTicket: string;
+  winningTicket!: string;
 
   // Adicione a propriedade winnerUserId aqui:
   @ForeignKey(() => User)
@@ -114,14 +114,14 @@ createdBy: number;
     type: DataType.INTEGER,
     allowNull: true, // Pode ser nulo se não houver vencedor
   })
-  winnerUserId: number;
+  winnerUserId!: number;
 
   @BelongsTo(() => User)
-  winnerUser: User;
+  winnerUser!: User;
 
   @HasMany(() => RaffleTicket)
-  tickets: RaffleTicket[];
+  tickets!: RaffleTicket[];
 
   @HasMany(() => RaffleNumber)
-  raffleNumbers: RaffleNumber[];
+  raffleNumbers!: RaffleNumber[];
 }

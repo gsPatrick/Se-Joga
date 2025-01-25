@@ -14,45 +14,45 @@ export class Challenge extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  createdBy: number;
+  createdBy!: number;
 
   @BelongsTo(() => User, 'createdBy')
-  createdByUser: User;
+  createdByUser!: User;
 
   @Column({
     type: DataType.ENUM,
     values: Object.values(ChallengeType),
     allowNull: false,
   })
-  type: ChallengeType;
+  type!: ChallengeType;
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
     defaultValue: DataType.NOW,
   })
-  startDate: Date;
+  startDate!: Date;
 
   @Column({
     type: DataType.DATE,
     allowNull: true,
   })
-  endDate: Date;
+  endDate!: Date;
 
   @Column({
     type: DataType.BOOLEAN,
     allowNull: false,
     defaultValue: false,
   })
-  finished: boolean;
+  finished!: boolean;
 
   @HasMany(() => UserChallenge)
-  userChallenges: UserChallenge[];
+  userChallenges!: UserChallenge[];
 }

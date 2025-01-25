@@ -11,31 +11,31 @@ export class UserChallenge extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  userId: number;
+  userId!: number;
 
   @BelongsTo(() => User)
-  user: User;
+  user!: User;
 
   @ForeignKey(() => Challenge)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  challengeId: number;
+  challengeId!: number;
 
   @BelongsTo(() => Challenge)
-  challenge: Challenge;
+  challenge!: Challenge;
 
   @HasMany(() => UserChallengeHighestDozenResult)
-  highestDozenResults: UserChallengeHighestDozenResult[];
+  highestDozenResults!: UserChallengeHighestDozenResult[];
 
   @HasMany(() => UserChallengeFirstTo1000Result)
-  firstTo1000Results: UserChallengeFirstTo1000Result[];
+  firstTo1000Results!: UserChallengeFirstTo1000Result[];
 }

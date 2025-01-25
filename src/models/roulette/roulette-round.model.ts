@@ -9,51 +9,51 @@ export class RouletteRound extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: true,
   })
-  createdBy: number;
+  createdBy!: number;
 
   @BelongsTo(() => User, 'createdBy')
-  createdByUser: User;
+  createdByUser!: User;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
   })
-  hash: string;
+  hash!: string;
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  winningNumber: number;
+  winningNumber!: number;
 
   @Column({
     type: DataType.ENUM('RED', 'BLACK', 'GREEN'),
     allowNull: false,
   })
-  winningColor: string;
+  winningColor!: string;
 
   @Column({
     type: DataType.ENUM('banca', 'sala'), // Tipo de roleta
     allowNull: false,
     defaultValue: 'banca', // Pode definir um valor padrão
   })
-  type: string;
+  type!: string;
 
   @Column({
     type: DataType.DATE,
     allowNull: true,
     defaultValue: DataType.NOW,
   })
-  createdAt: Date;
+  createdAt!: Date;
 
   @HasMany(() => RouletteBet)
-  bets: RouletteBet[];
+  bets!: RouletteBet[];
     finished: any;
 }

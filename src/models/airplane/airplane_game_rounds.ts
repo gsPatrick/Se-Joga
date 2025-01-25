@@ -18,63 +18,63 @@ import {
       autoIncrement: true,
       primaryKey: true,
     })
-    id: number;
+    id!: number;
   
     @ForeignKey(() => User)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    userId: number;
+    userId!: number;
   
     @BelongsTo(() => User)
-    user: User;
+    user!: User;
   
     @Column({
       type: DataType.DECIMAL(10, 2),
       allowNull: false,
     })
-    betAmount: number;
+    betAmount!: number;
   
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    chosenNumber: number;
+    chosenNumber!: number;
   
     @Column({
       type: DataType.DATE,
       allowNull: false,
       defaultValue: DataType.NOW,
     })
-    createdAt: Date;
+    createdAt!: Date;
   
     @Column({
       type: DataType.BOOLEAN,
       allowNull: false,
       defaultValue: false,
     })
-    finished: boolean;
+    finished!: boolean;
   
     @Column({
       type: DataType.INTEGER,
       defaultValue: 1,
     })
-    startLevel: number;
+    startLevel!: number;
   
     @Column({
       type: DataType.INTEGER,
       allowNull: true,
     })
-    maxLevel: number;
+    maxLevel!: number;
   
     @ForeignKey(() => User)
     @Column({
       type: DataType.INTEGER,
       allowNull: true,
     })
-    winnerUserId: number;
+    winnerUserId!: number;
   
     @HasMany(() => AirplaneGameRoundSeed)
-    airplaneGameRoundSeeds: AirplaneGameRoundSeed[];
+    airplaneGameRoundSeeds!: AirplaneGameRoundSeed[];
   }

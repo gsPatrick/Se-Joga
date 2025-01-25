@@ -8,21 +8,21 @@ export class BlockchainHash extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @Column({
     type: DataType.STRING,
     allowNull: false,
     unique: true,
   })
-  hash: string;
+  hash!: string;
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
   })
-  timestamp: Date;
+  timestamp!: Date;
 
   @HasMany(() => Seed)
-  seeds: Seed[];
+  seeds!: Seed[];
 }

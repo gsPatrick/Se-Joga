@@ -8,8 +8,8 @@ import { createHash } from 'crypto';
 
 @Injectable()
 export class HashService {
-  private latestHash: string;
-  private lastHashUpdate: number;
+  private latestHash!: string;
+  private lastHashUpdate: number = 0;
   private readonly logger = new Logger(HashService.name);
 
   constructor(
@@ -33,7 +33,7 @@ export class HashService {
     });
 
     if (!latestHash) {
-      return null;
+      return -1;
     }
 
     return latestHash.id;
@@ -73,9 +73,10 @@ export class HashService {
         );
       }
     } catch (error) {
+      const err = error as Error;
       this.logger.error(
-        `Erro ao buscar ou armazenar o hash da blockchain: ${error.message}`,
-        error.stack,
+        `Erro ao buscar ou armazenar o hash da blockchain: ${err.message}`,
+        err.stack,
       );
     }
   }
@@ -89,8 +90,8 @@ export class HashService {
         numbers.push(number);
       } catch (error) {
         this.logger.error(
-          `Erro ao gerar número na iteração ${i}: ${error.message}`,
-          error.stack,
+          `Erro ao gerar número na iteração ${i}: ${(error as Error).message}`,
+          (error as Error).stack,
         );
         continue;
       }
@@ -115,9 +116,10 @@ export class HashService {
         );
       }
     } catch (error) {
+      const err = error as Error;
       this.logger.error(
-        `Erro ao armazenar a seed para o seedId ${seedId}: ${error.message}`,
-        error.stack,
+        `Erro ao armazenar a seed para o seedId ${seedId}: ${err.message}`,
+        err.stack,
       );
     }
   }

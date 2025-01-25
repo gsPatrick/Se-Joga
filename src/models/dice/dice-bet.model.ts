@@ -16,56 +16,56 @@ export class DiceBet extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  userId: number;
+  userId!: number;
 
   @BelongsTo(() => User)
-  user: User;
+  user!: User;
 
   @ForeignKey(() => DiceRound)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  roundId: number;
+  roundId!: number;
 
   @BelongsTo(() => DiceRound)
-  round: DiceRound;
+  round!: DiceRound;
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  betNumber: number; // O número em que o usuário apostou (1-6)
+  betNumber!: number; // O número em que o usuário apostou (1-6)
 
   @Column({
     type: DataType.DECIMAL(10, 2),
     allowNull: false,
   })
-  betAmount: number;
+  betAmount!: number;
 
   @Column({
     type: DataType.BOOLEAN,
     allowNull: false,
   })
-  win: boolean; // Resultado da aposta (true se ganhou, false se perdeu)
+  win!: boolean; // Resultado da aposta (true se ganhou, false se perdeu)
 
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  generatedNumber: number; // Número gerado pelo sistema
+  generatedNumber!: number; // Número gerado pelo sistema
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
     defaultValue: DataType.NOW,
   })
-  createdAt: Date;
+  createdAt!: Date;
 }

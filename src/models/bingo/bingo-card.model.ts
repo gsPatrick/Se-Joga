@@ -10,28 +10,28 @@ export class BingoCard extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  userId: number;
+  userId!: number;
 
   @BelongsTo(() => User)
-  user: User;
+  user!: User;
 
   @ForeignKey(() => BingoGame)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  bingoGameId: number;
+  bingoGameId!: number;
 
   @BelongsTo(() => BingoGame)
-  bingoGame: BingoGame;
+  bingoGame!: BingoGame;
 
   @HasMany(() => BingoNumber)
-  numbers: BingoNumber[];
+  numbers!: BingoNumber[];
 }

@@ -17,31 +17,31 @@ import {
       autoIncrement: true,
       primaryKey: true,
     })
-    id: number;
+    id!: number;
   
     @ForeignKey(() => BlockchainHash)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    hashId: number;
+    hashId!: number;
   
     @BelongsTo(() => BlockchainHash)
-    blockchainHash: BlockchainHash;
+    blockchainHash!: BlockchainHash;
   
     @Column({
       type: DataType.TEXT, // Alterado para TEXT
       allowNull: false,
     })
-    seed: string;
+    seed!: string;
   
     @Column({
       type: DataType.DATE,
       allowNull: false,
       defaultValue: DataType.NOW,
     })
-    createdAt: Date;
+    createdAt!: Date;
   
     @HasMany(() => GeneratedNumber)
-    generatedNumbers: GeneratedNumber[];
+    generatedNumbers!: GeneratedNumber[];
   }

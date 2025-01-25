@@ -17,31 +17,31 @@ import {
       autoIncrement: true,
       primaryKey: true,
     })
-    id: number;
+    id!: number;
   
     @ForeignKey(() => AirplaneGameRound)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    roundId: number;
+    roundId!: number;
   
     @BelongsTo(() => AirplaneGameRound)
-    airplaneGameRound: AirplaneGameRound;
+    airplaneGameRound!: AirplaneGameRound;
   
     @ForeignKey(() => Seed)
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    seedId: number;
+    seedId!: number;
   
     @BelongsTo(() => Seed)
-    seed: Seed;
+    seed!: Seed;
   
     @Column({
       type: DataType.INTEGER,
       allowNull: false,
     })
-    level: number;
+    level!: number;
   }

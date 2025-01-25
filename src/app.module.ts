@@ -23,18 +23,15 @@ import { RaffleNumber } from './models/raffle/raffle-number.model';
 import { GeneratedNumber } from './models/generated-number.model';
 import { BlockchainHash } from './models/blockchain-hash.model'; // Importe o modelo
 import { Seed } from './models/seed.model'; // Importe o modelo
-import { OddUtils } from './Utils/odd.utils';
 
 
 
-import { AuthModule } from './auth/auth.module';
+import { AuthModule } from './Auth/auth.module';
 import { RaffleModule } from './Raflle/raffle.module';
 import { HashModule } from './hash/hash.module';
 import { SeedModule } from './seed/seed.module';
 import { ScheduleModule } from '@nestjs/schedule';
-import { DiceModule } from './dice/dice.module';
-import { RouletteModule } from './roulette/roulette.module';
-import { UtilsModule } from './utils/utils.module';
+import { DiceModule } from './Dice/dice.module';
 
 
 
@@ -47,7 +44,7 @@ import { UtilsModule } from './utils/utils.module';
       host: 'localhost',
       port: 5432,
       username: 'postgres',
-      password: '123',
+      password: 'patrick',
       database: 'seJoga',
       models: [
         User,
@@ -83,8 +80,6 @@ import { UtilsModule } from './utils/utils.module';
     SeedModule,
     RaffleModule,
     DiceModule,
-    RouletteModule,
-    UtilsModule,
     ScheduleModule.forRoot(),
   ],
 

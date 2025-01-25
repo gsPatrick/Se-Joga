@@ -49,7 +49,7 @@ import {
       return result;
     } catch (error) {
       this.logger.error(
-        `Erro ao jogar dado para o usuário ${userId}: ${error.message}`,
+        `Erro ao jogar dado para o usuário ${userId}: ${(error as Error).message}`,
       );
       throw error;
     }

@@ -11,35 +11,35 @@ export class BingoGameRound extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => BingoGame)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  bingoGameId: number;
+  bingoGameId!: number;
 
   @BelongsTo(() => BingoGame)
-  bingoGame: BingoGame;
+  bingoGame!: BingoGame;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  createdBy: number;
+  createdBy!: number;
 
   @BelongsTo(() => User, 'createdBy')
-  createdByUser: User;
+  createdByUser!: User;
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
     defaultValue: DataType.NOW,
   })
-  createdAt: Date;
+  createdAt!: Date;
 
   @BelongsToMany(() => BingoNumber, () => BingoGameRoundNumber)
-  drawnNumbers: BingoNumber[];
+  drawnNumbers!: BingoNumber[];
 }

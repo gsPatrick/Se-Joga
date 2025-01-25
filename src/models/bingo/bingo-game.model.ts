@@ -9,32 +9,32 @@ export class BingoGame extends Model {
     autoIncrement: true,
     primaryKey: true,
   })
-  id: number;
+  id!: number;
 
   @ForeignKey(() => User)
   @Column({
     type: DataType.INTEGER,
     allowNull: false,
   })
-  createdBy: number;
+  createdBy!: number;
 
   @BelongsTo(() => User, 'createdBy')
-  createdByUser: User;
+  createdByUser!: User;
 
   @Column({
     type: DataType.DATE,
     allowNull: false,
     defaultValue: DataType.NOW,
   })
-  createdAt: Date;
+  createdAt!: Date;
 
   @Column({
     type: DataType.BOOLEAN,
     allowNull: false,
     defaultValue: false,
   })
-  finished: boolean;
+  finished!: boolean;
 
   @HasMany(() => BingoCard)
-  bingoCards: BingoCard[];
+  bingoCards!: BingoCard[];
 }
