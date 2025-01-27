@@ -13,9 +13,6 @@ import { Op } from 'sequelize';
 
 @Injectable()
 export class RaffleService {
-  getTeamNames() {
-    throw new Error('Method not implemented.');
-  }
   private readonly logger = new Logger(RaffleService.name);
 
     public readonly teamNames = [
@@ -451,7 +448,7 @@ private formatWinningTicketInfo(raffle: Raffle): any {
   };
 }
 
-  private formatRaffleTickets(raffle: Raffle): any[] {
+   private formatRaffleTickets(raffle: Raffle): any[] {
     if (!raffle.tickets) {
         return [];
     }
@@ -773,10 +770,8 @@ async getRaffleByIdWithDetails(raffleId: number): Promise<any> {
         'Esta rota é válida apenas para rifas de equipes.',
       );
     }
-
-
     return this.getFormattedTeams(raffle)
-  }
+}
 
 async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
     return this.raffleModel.findAll({
@@ -998,7 +993,7 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
 
   // Parte do serviço da RIFA DE TIME
 
-  async createTeamRaffle(teamName: string, endDate?: Date): Promise<Raffle> {
+  async createTeamRaffle(endDate?: Date): Promise<Raffle> {
     // 1. Encontrar a hash mais recente
     const latestHash = await this.blockchainHashModel.findOne({
       order: [['timestamp', 'DESC']],
@@ -1038,7 +1033,7 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
     const newRaffle = await this.raffleModel.create({
       raffleIdentifier: `RIFA-EQUIPES-${Date.now()}`,
       createdBy: null,
-      title: `Rifa de Equipes ${teamName}`, // Usando o teamName aqui
+      title: `Rifa de Equipes Automática`,
       description: `Rifa de equipes gerada automaticamente com base na hash ${latestHash.hash}`,
       ticketPrice: 10.0,
       totalTickets: 100,
@@ -1068,64 +1063,68 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
 
     // Método para determinar a equipe vencedora com base na dezena
     private getTeamNameByTicketNumber(raffle: Raffle,ticketNumber: string): string {
+      if (!ticketNumber) return 'Nenhum';
+
         const ticketNumberInt = parseInt(ticketNumber, 10);
-        const teamIndex = Math.floor(ticketNumberInt / 5); // Cada equipe tem 5 números
-        return this.teamNames[teamIndex];
+        const teamIndex = Math.floor(ticketNumberInt / 4); // Cada equipe tem 4 números
+        return this.teamNames[teamIndex] || 'Nenhum';
     }
 
     private getFormattedTeams(raffle: Raffle): any {
-        const totalTickets = raffle.totalTickets;
-        const ticketsPerTeam = 5;
-        const totalTeams = totalTickets / ticketsPerTeam;
-        const teams = {};
+      const totalTickets = raffle.totalTickets;
+      const ticketsPerTeam = 4;
+      const totalTeams = totalTickets / ticketsPerTeam;
+      const teams = {};
 
-        for (let i = 0; i < totalTeams; i++) {
-          const teamName = this.teamNames[i];
-          const teamTickets: string[] = [];
-          const members = {};
-  
-          for (let j = 0; j < ticketsPerTeam; j++) {
-            const ticketNumber = (i * ticketsPerTeam + j)
-              .toString()
-              .padStart(2, '0');
-            teamTickets.push(ticketNumber);
-  
-            const ticket = raffle.tickets.find(
-              (t) => t.ticketNumber === ticketNumber,
-            );
-            if (ticket && ticket.user) {
-              if (!members[ticket.user.id]) {
-                members[ticket.user.id] = {
-                  id: ticket.user.id,
-                  name: ticket.user.name,
-                  tickets: [],
-                };
-              }
-              members[ticket.user.id].tickets.push(ticketNumber);
+      for (let i = 0; i < totalTeams; i++) {
+        const teamName = this.teamNames[i];
+        const teamTickets: string[] = [];
+        const members = {};
+
+        for (let j = 0; j < ticketsPerTeam; j++) {
+          const ticketNumber = (i * ticketsPerTeam + j)
+            .toString()
+            .padStart(2, '0');
+          teamTickets.push(ticketNumber);
+
+          const ticket = raffle.tickets.find(
+            (t) => t.ticketNumber === ticketNumber,
+          );
+          if (ticket && ticket.user) {
+            if (!members[ticket.user.id]) {
+              members[ticket.user.id] = {
+                id: ticket.user.id,
+                name: ticket.user.name,
+                tickets: [],
+              };
             }
+            members[ticket.user.id].tickets.push(ticketNumber);
           }
-          const teamMembers = Object.values(members);
-
-          teams[teamName] = {
-            teamName: teamName,
-            tickets: teamTickets,
-            members: teamMembers,
-          };
         }
-      
-        return teams;
+        const teamMembers = Object.values(members);
+
+        teams[teamName] = {
+          teamName: teamName,
+          tickets: teamTickets,
+          members: teamMembers,
+        };
+      }
+    
+      return teams;
+    }
+
+    getTeamNames() {
+        return this.teamNames;
       }
 
-
-
   // Cron job para criar rifas de equipes a cada 10 segundos
-  @Cron('0 0 */2 * * *')
+  @Cron('*/10 * * * * *')
   async createTeamRafflesCronJob() {
     this.logger.log('Iniciando cron job para criar rifas de equipes...');
 
     for (const teamName of this.teamNames) {
       try {
-        const newRaffle = await this.createTeamRaffle(teamName);
+        const newRaffle = await this.createTeamRaffle();
         this.logger.log(
           `Rifa de equipes ${teamName} criada pelo cron job com id: ${newRaffle.id}`,
         );
@@ -1228,11 +1227,11 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
       const winningTeamTickets = raffle.tickets.filter(
         (ticket) => this.getTeamNameByTicketNumber(raffle,ticket.ticketNumber) === winningTeam,
       );
-
-      // 6. Calcular a premiação
+       // 6. Calcular a premiação
       const totalPrize = raffle.ticketPrice * raffle.soldTickets;
-      const mainPrize = totalPrize * 0.7; // 70% para o vencedor principal
-      const secondaryPrizePool = totalPrize * 0.2; // 20% para dividir entre os vencedores secundários
+      const mainPrize = totalPrize * 0.5; // 50% para o vencedor principal
+      const secondaryPrizePool = totalPrize * 0.3; // 30% para dividir entre os vencedores secundários
+      const banca = totalPrize * 0.2; // 20% para a banca
       const secondaryPrize =
         winningTeamTickets.length > 1
           ? secondaryPrizePool / (winningTeamTickets.length - 1)
@@ -1290,15 +1289,24 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
              }
           }
         }
-      } else {
-        // Enviar notificação para todos os participantes que não tiveram bilhete vencedor
-        for (const ticket of raffle.tickets) {
+         // Enviar notificação para todos os participantes que não tiveram bilhete vencedor
+         for (const ticket of raffle.tickets) {
+          if(!winningTeamTickets.find(winTicket => winTicket.id === ticket.id)){
+             await this.sendNotification(
+               ticket.userId,
+               `A rifa de equipe ${raffle.id} foi finalizada. A dezena vencedora foi ${winningDezena}, pertencente à equipe ${winningTeam}. Infelizmente, você não ganhou desta vez.`,
+            );
+          }
+        }
+      }else{
+       // Enviar notificação para todos os participantes que não tiveram bilhete vencedor
+       for (const ticket of raffle.tickets) {
           await this.sendNotification(
             ticket.userId,
             `A rifa de equipe ${raffle.id} foi finalizada. A dezena vencedora foi ${winningDezena}, pertencente à equipe ${winningTeam}. Infelizmente, você não ganhou desta vez.`,
           );
         }
-      }
+    }
 
       // Atualizar os dados da rifa e salvar
       await raffle.save({ transaction });
@@ -1325,6 +1333,56 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
       );
     }
   }
+
+
+  async getRaffleTeamsWithAvailability(raffleId: number): Promise<any> {
+    const raffle = await this.raffleModel.findByPk(raffleId, {
+        attributes: ['id', 'type', 'totalTickets'],
+        include: [
+          {
+            model: RaffleTicket,
+            attributes: ['ticketNumber', 'userId'],
+              include: [
+                {
+                  model: User,
+                  attributes: ['id', 'name'],
+                },
+              ],
+          },
+        ],
+      });
+
+    if (!raffle) {
+      throw new NotFoundException('Rifa não encontrada.');
+    }
+
+    if (raffle.type !== 'equipes') {
+      throw new BadRequestException(
+        'Esta rota é válida apenas para rifas de equipes.',
+      );
+    }
+    const formattedTeams = this.getFormattedTeams(raffle)
+
+    const allTickets = Array.from({ length: raffle.totalTickets }, (_, i) =>
+      i.toString().padStart(raffle.totalTickets.toString().length, '0')
+    );
+
+    const availableTickets: any = {};
+
+        for (const teamName of Object.keys(formattedTeams)) {
+            const boughtTickets = formattedTeams[teamName].tickets;
+            const available = allTickets.filter((ticketNumber)=>!boughtTickets.includes(ticketNumber))
+            availableTickets[teamName] = available;
+        }
+
+
+    return {
+      raffleId: raffle.id,
+      teams: Object.values(formattedTeams),
+      availableTickets: availableTickets,
+    };
+}
+
   sendNotification(userId: number, arg1: string) {
     throw new Error('Method not implemented.');
   }

@@ -187,8 +187,7 @@ constructor(private readonly raffleService: RaffleService) {}
   @Post('team/system')
   async createSystemTeamRaffle() {
       this.logger.log('Criando rifa de equipes do sistema...');
-      const teamName = this.raffleService.getTeamNames()[0];
-      return await this.raffleService.createTeamRaffle(teamName);
+      return await this.raffleService.createTeamRaffle();
   }
 
   @Post(':raffleId/finalize-team')
@@ -203,4 +202,11 @@ constructor(private readonly raffleService: RaffleService) {}
       this.logger.log(`Buscando equipes da rifa ${raffleId}...`);
       return await this.raffleService.getRaffleTeams(raffleId);
   }
+
+  @Get(':raffleId/teams-with-availability')
+  async getRaffleTeamsWithAvailability(@Param('raffleId', ParseIntPipe) raffleId: number) {
+      this.logger.log(`Buscando equipes da rifa ${raffleId} com disponibilidade...`);
+      return await this.raffleService.getRaffleTeamsWithAvailability(raffleId);
+  }  
+
 }
