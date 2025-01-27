@@ -1118,7 +1118,7 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
       }
 
   // Cron job para criar rifas de equipes a cada 10 segundos
-  @Cron('*/10 * * * * *')
+  @Cron('0 0 */2 * * *')
   async createTeamRafflesCronJob() {
     this.logger.log('Iniciando cron job para criar rifas de equipes...');
 

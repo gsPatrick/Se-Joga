@@ -32,6 +32,8 @@ import { HashModule } from './hash/hash.module';
 import { SeedModule } from './seed/seed.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { DiceModule } from './Dice/dice.module';
+import { TestModule } from './RecentNumberSeed/test.module';
+
 
 
 
@@ -80,6 +82,7 @@ import { DiceModule } from './Dice/dice.module';
     SeedModule,
     RaffleModule,
     DiceModule,
+    TestModule,
     ScheduleModule.forRoot(),
   ],
 
