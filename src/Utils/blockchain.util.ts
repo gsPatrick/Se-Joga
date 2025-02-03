@@ -36,7 +36,7 @@ export class BlockchainUtil {
                 limit: 1,
               },
             ],
-           order: [['createdAt', 'DESC']],
+            order: [['createdAt', 'DESC']],
           });
 
         if (!correspondingSeed || correspondingSeed.generatedNumbers.length === 0) {
@@ -53,4 +53,15 @@ export class BlockchainUtil {
             generatedNumber: latestGeneratedNumber.number,
             };
     }
+      async getLatestHashId(): Promise<number> {
+        const latestHash = await this.blockchainHashModel.findOne({
+          order: [['timestamp', 'DESC']],
+        });
+    
+        if (!latestHash) {
+          return -1;
+        }
+    
+        return latestHash.id;
+      }
 }

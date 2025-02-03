@@ -1,4 +1,13 @@
-import { Table, Column, Model, DataType, ForeignKey, BelongsTo, BelongsToMany } from 'sequelize-typescript';
+// src/models/bingo/bingo-number.model.ts
+import {
+  Table,
+  Column,
+  Model,
+  DataType,
+  ForeignKey,
+  BelongsTo,
+    HasMany
+} from 'sequelize-typescript';
 import { BingoCard } from './bingo-card.model';
 import { BingoGameRound } from './bingo-game-round.model';
 import { BingoGameRoundNumber } from './bingo-game-round-number.model';
@@ -28,6 +37,20 @@ export class BingoNumber extends Model {
   })
   value!: number;
 
-  @BelongsToMany(() => BingoGameRound, () => BingoGameRoundNumber)
-  bingoGameRounds!: BingoGameRound[];
+   @Column({
+       type: DataType.DATE,
+       allowNull: false,
+        defaultValue: DataType.NOW,
+   })
+     createdAt!: Date;
+
+    @Column({
+       type: DataType.DATE,
+         allowNull: false,
+          defaultValue: DataType.NOW,
+        })
+    updatedAt!: Date;
+    
+    @HasMany(() => BingoGameRoundNumber)
+    bingoGameRounds!: BingoGameRound[];
 }

@@ -4,6 +4,9 @@ import { RouletteRound } from './roulette-round.model';
 
 @Table
 export class RouletteBet extends Model {
+    odd(odd: any) {
+        throw new Error('Method not implemented.');
+    }
   @Column({
     type: DataType.INTEGER,
     autoIncrement: true,
@@ -80,4 +83,5 @@ export class RouletteBet extends Model {
     allowNull: true,
   })
   betColumn!: number; // Agora não é mais obrigatorio
+    win!: boolean;
 }

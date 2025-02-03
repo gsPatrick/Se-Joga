@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+// src/hash/hash.service.ts
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import axios from 'axios';
 import { BlockchainHash } from '../models/blockchain-hash.model';
@@ -67,7 +68,7 @@ export class HashService {
         await this.generateAndStoreSeed(newSeed.id, hash);
       } else {
         this.latestHash = existingHash.hash;
-        this.lastHashUpdate = existingHash.timestamp.getTime();
+        this.lastHashUpdate = existingHash.createdAt.getTime();
         this.logger.log(
           `Hash existente encontrado e reutilizado: ${this.latestHash}`,
         );
@@ -90,7 +91,7 @@ export class HashService {
         numbers.push(number);
       } catch (error) {
         this.logger.error(
-          `Erro ao gerar número na iteração ${i}: ${(error as Error).message}`,
+          `Erro ao gerar número na iteração ${i}: ${ (error as Error).message}`,
           (error as Error).stack,
         );
         continue;

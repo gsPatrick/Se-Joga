@@ -3,14 +3,19 @@ import { Module } from '@nestjs/common';
 import { DiceService } from './dice.service';
 import { DiceController } from './dice.controller';
 import { SequelizeModule } from '@nestjs/sequelize';
-import { BlockchainHash } from '../models/blockchain-hash.model';
+import { DiceRound } from '../models/dice/dice-round.model';
+import { DiceBet } from '../models/dice/dice-bet.model';
+import { BlockchainUtil } from '../Utils/blockchain.util';
 import { User } from 'src/models/user/user.model';
-import { DiceBet } from 'src/models/dice/dice-bet.model';
-import { DiceRound } from 'src/models/dice/dice-round.model';
+import { Seed } from 'src/models/seed.model';
+import { GeneratedNumber } from 'src/models/generated-number.model';
+import { DiceRoundSeed } from 'src/models/dice/dice_round_seeds';
+import { BlockchainHash } from 'src/models/blockchain-hash.model';
 
 @Module({
-  imports: [SequelizeModule.forFeature([BlockchainHash, User, DiceBet, DiceRound])],
-  providers: [DiceService],
+    imports: [SequelizeModule.forFeature([DiceRound, DiceBet, User, DiceRoundSeed, BlockchainHash,  GeneratedNumber, Seed])],
+  providers: [DiceService, BlockchainUtil],
   controllers: [DiceController],
+     exports: [DiceService],
 })
 export class DiceModule {}

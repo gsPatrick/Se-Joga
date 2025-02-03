@@ -23,16 +23,22 @@ import { RaffleNumber } from './models/raffle/raffle-number.model';
 import { GeneratedNumber } from './models/generated-number.model';
 import { BlockchainHash } from './models/blockchain-hash.model'; // Importe o modelo
 import { Seed } from './models/seed.model'; // Importe o modelo
-
+import { BetGameRound } from './models/bet/bet-game-round.model';
+import { Bet } from './models/bet/bet.model';
+import { DiceRoundSeed } from './models/dice/dice_round_seeds';
+import { BetGameRoundSeed } from './models/bet/bet-game-round.model-seed';
+import { BingoGameSeed } from './models/bingo/bingo_game_seeds';
 
 
 import { AuthModule } from './Auth/auth.module';
 import { RaffleModule } from './Raflle/raffle.module';
 import { HashModule } from './hash/hash.module';
 import { SeedModule } from './seed/seed.module';
+import { BingoModule } from './Bingo/bingo.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { DiceModule } from './Dice/dice.module';
 import { TestModule } from './RecentNumberSeed/test.module';
+import { BetModule } from './Bet/bet.module';
 
 
 
@@ -69,8 +75,13 @@ import { TestModule } from './RecentNumberSeed/test.module';
         UserChallengeFirstTo1000Result,
         UserChallengeFirstTo1000Round,
         RaffleNumber,
+        Bet,
+        BetGameRound,
+        BetGameRoundSeed,
         GeneratedNumber,
         BlockchainHash, // Adicione o modelo
+        DiceRoundSeed,
+        BingoGameSeed,
         Seed, // Adicione o modelo
 
       ],
@@ -83,6 +94,9 @@ import { TestModule } from './RecentNumberSeed/test.module';
     RaffleModule,
     DiceModule,
     TestModule,
+    BingoModule,
+    BetModule,
+    
     ScheduleModule.forRoot(),
   ],
 

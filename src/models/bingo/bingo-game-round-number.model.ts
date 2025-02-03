@@ -1,8 +1,15 @@
-import { Table, Column, Model, DataType, ForeignKey, BelongsTo } from 'sequelize-typescript';
+import {
+  Table,
+  Column,
+  Model,
+  DataType,
+  ForeignKey,
+  BelongsTo,
+} from 'sequelize-typescript';
 import { BingoGameRound } from './bingo-game-round.model';
 import { BingoNumber } from './bingo-number.model';
 
-@Table
+@Table({ tableName: 'bingo_game_round_numbers' })
 export class BingoGameRoundNumber extends Model {
   @Column({
     type: DataType.INTEGER,
@@ -18,7 +25,7 @@ export class BingoGameRoundNumber extends Model {
   })
   bingoGameRoundId!: number;
 
-  @BelongsTo(() => BingoGameRound)
+  @BelongsTo(() => BingoGameRound, {onDelete: 'CASCADE', foreignKey: 'bingoGameRoundId'})
   bingoGameRound!: BingoGameRound;
 
   @ForeignKey(() => BingoNumber)
@@ -28,6 +35,6 @@ export class BingoGameRoundNumber extends Model {
   })
   bingoNumberId!: number;
 
-  @BelongsTo(() => BingoNumber)
+  @BelongsTo(() => BingoNumber, {onDelete: 'CASCADE', foreignKey: 'bingoNumberId'})
   bingoNumber!: BingoNumber;
 }

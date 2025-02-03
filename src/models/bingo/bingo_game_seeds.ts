@@ -1,40 +1,37 @@
-import {
-    Table,
-    Column,
-    Model,
-    DataType,
-    ForeignKey,
-    BelongsTo,
-  } from 'sequelize-typescript';
-  import { BingoGame } from './bingo-game.model';
-  import { Seed } from '../seed.model';
+    // src/models/bingo/bingo_game_seeds.ts
+    import {
+      Table,
+      Column,
+      Model,
+      ForeignKey,
+      BelongsTo,
+      CreatedAt,
+      UpdatedAt
+      } from 'sequelize-typescript';
+      import { Seed } from '../seed.model';
+      import { BingoGame } from './bingo-game.model';
   
-  @Table({ tableName: 'bingo_game_seeds' })
-  export class BingoGameSeed extends Model {
-    @Column({
-      type: DataType.INTEGER,
-      autoIncrement: true,
-      primaryKey: true,
-    })
-    id!: number;
+      @Table({ tableName: 'bingo_game_seeds' })
+      export class BingoGameSeed extends Model {
+          @Column({ primaryKey: true, autoIncrement: true })
+          id!: number;
+      
+          @ForeignKey(() => BingoGame)
+          @Column
+          gameId!: number;
+      
+          @BelongsTo(() => BingoGame)
+          bingoGame!: BingoGame;
   
-    @ForeignKey(() => BingoGame)
-    @Column({
-      type: DataType.INTEGER,
-      allowNull: false,
-    })
-    gameId!: number;
+          @ForeignKey(() => Seed)
+           @Column
+            seedId!: number;
   
-    @BelongsTo(() => BingoGame)
-    bingoGame!: BingoGame;
-  
-    @ForeignKey(() => Seed)
-    @Column({
-      type: DataType.INTEGER,
-      allowNull: false,
-    })
-    seedId!: number;
-  
-    @BelongsTo(() => Seed)
-    seed!: Seed;
-  }
+           @BelongsTo(() => Seed)
+           seed!: Seed;
+             @CreatedAt
+            createdAt!: Date;
+    
+            @UpdatedAt
+           updatedAt!: Date;
+     }

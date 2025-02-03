@@ -56,4 +56,5 @@ export class RouletteRound extends Model {
   @HasMany(() => RouletteBet)
   bets!: RouletteBet[];
     finished: any;
+    betGameRoundSeed: any;
 }

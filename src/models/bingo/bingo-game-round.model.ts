@@ -1,10 +1,11 @@
-import { Table, Column, Model, DataType, ForeignKey, BelongsTo, BelongsToMany } from 'sequelize-typescript';
-import { User } from '../user/user.model';
+import { Table, Column, Model, DataType, ForeignKey, BelongsTo, HasMany, CreatedAt, UpdatedAt } from 'sequelize-typescript';
 import { BingoGame } from './bingo-game.model';
+import { User } from '../user/user.model';
 import { BingoNumber } from './bingo-number.model';
 import { BingoGameRoundNumber } from './bingo-game-round-number.model';
 
-@Table
+
+@Table({ tableName: 'bingo_game_rounds' })
 export class BingoGameRound extends Model {
   @Column({
     type: DataType.INTEGER,
@@ -33,13 +34,12 @@ export class BingoGameRound extends Model {
   @BelongsTo(() => User, 'createdBy')
   createdByUser!: User;
 
-  @Column({
-    type: DataType.DATE,
-    allowNull: false,
-    defaultValue: DataType.NOW,
-  })
+  @CreatedAt
   createdAt!: Date;
 
-  @BelongsToMany(() => BingoNumber, () => BingoGameRoundNumber)
-  drawnNumbers!: BingoNumber[];
+  @HasMany(() => BingoGameRoundNumber, { onDelete: 'CASCADE', foreignKey: 'bingoGameRoundId'})
+  drawnNumbers!: BingoGameRoundNumber[];
+  
+  @UpdatedAt
+  updatedAt!: Date;
 }
