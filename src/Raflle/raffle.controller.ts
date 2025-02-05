@@ -10,33 +10,58 @@ import {
   HttpStatus,
   UseGuards,
 } from '@nestjs/common';
-import { Request } from '@nestjs/common'; // Correto
+import { Request } from '@nestjs/common';
 import { RaffleService } from './raffle.service';
 import { AuthGuard } from '@nestjs/passport';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { Raffle } from 'src/models/raffle/raffle.model';
+import { RaffleTicket } from 'src/models/raffle/raffle-ticket.model';
 
-
-
+@ApiTags('raffles')
 @Controller('raffles')
 export class RaffleController {
 private readonly logger = new Logger(RaffleController.name);
 
 constructor(private readonly raffleService: RaffleService) {}
 
-  @Post('system')
-  async createSystemRaffle() {
+@Post('system')
+  @ApiOperation({ summary: 'Cria uma rifa tradicional do sistema' })
+  @ApiResponse({ status: 201, description: 'Rifa tradicional criada com sucesso', type: Raffle})
+  async createSystemRaffle(): Promise<Raffle> {
     this.logger.log('Criando rifa do sistema...');
     return await this.raffleService.createSystemRaffle();
   }
 
-  // Endpoint para comprar bilhetes (SEM PROTEÇÃO)
   @UseGuards(AuthGuard('jwt'))
   @Post(':raffleId/buy-tickets')
+      @ApiOperation({ summary: 'Comprar bilhetes específicos para uma rifa' })
+     @ApiBearerAuth()
+      @ApiBody({
+          schema:{
+              type: 'object',
+              properties:{
+                  ticketNumbers: {
+                    type: 'array',
+                      items: {
+                          type: 'string'
+                      }
+                  },
+                  type: {
+                      type: 'string',
+                      enum: ['tradicional', 'equipes']
+                  }
+              }
+          }
+      })
+      @ApiResponse({ status: 201, description: 'Bilhetes comprados com sucesso', type: [RaffleTicket] })
+      @ApiResponse({ status: 400, description: 'Dados inválidos' })
+      @ApiResponse({ status: 404, description: 'Rifa não encontrada' })
   async buyRaffleTickets(
       @Param('raffleId', ParseIntPipe) raffleId: number,
       @Request() req,
       @Body('ticketNumbers') ticketNumbers: string[],
-      @Body('type') type: 'tradicional' | 'equipes' = 'tradicional'
-  ) {
+      @Body('type') type: 'tradicional' | 'equipes' = 'tradicional',
+  ): Promise<RaffleTicket[]> {
       const userId = req.user.id;
       this.logger.log(
       `Usuário ${userId} tentando comprar os bilhetes ${ticketNumbers.join(
@@ -50,8 +75,27 @@ constructor(private readonly raffleService: RaffleService) {}
       );
   }
 
-  @UseGuards(AuthGuard('jwt'))
+   @UseGuards(AuthGuard('jwt'))
   @Post(':raffleId/buy-random')
+  @ApiOperation({ summary: 'Comprar bilhetes aleatórios para uma rifa' })
+     @ApiBearerAuth()
+       @ApiBody({
+          schema:{
+              type: 'object',
+              properties:{
+                quantity: {
+                   type: 'number'
+                },
+                type: {
+                      type: 'string',
+                      enum: ['tradicional', 'equipes']
+                  }
+              }
+          }
+      })
+  @ApiResponse({ status: 201, description: 'Bilhetes comprados com sucesso', type: [RaffleTicket]})
+   @ApiResponse({ status: 400, description: 'Dados inválidos' })
+  @ApiResponse({ status: 404, description: 'Rifa não encontrada' })
   async buyRandomRaffleTickets(
       @Param('raffleId', ParseIntPipe) raffleId: number,
       @Request() req,
@@ -65,41 +109,53 @@ constructor(private readonly raffleService: RaffleService) {}
       return await this.raffleService.buyRaffleTickets(userId, raffleId, { type, quantityOrNumbers: quantity });
   }
 
-
   @Get()
-  async getRafflesWithDetails() {
+  @ApiOperation({ summary: 'Lista todas as rifas com seus detalhes' })
+  @ApiResponse({ status: 200, description: 'Retorna todas as rifas.', type: [Raffle] })
+  async getRafflesWithDetails(): Promise<Raffle[]> {
     this.logger.log('Buscando detalhes de todas as rifas...');
     return await this.raffleService.getRafflesWithDetails();
   }
-
-  @Post(':raffleId/finalize')
-  @HttpCode(HttpStatus.OK) // Retorna 200 OK em vez de 201 Created
-  async finalizeRaffle(@Param('raffleId', ParseIntPipe) raffleId: number) {
+  
+   @Post(':raffleId/finalize')
+      @ApiOperation({ summary: 'Finaliza manualmente uma rifa tradicional' })
+   @ApiResponse({ status: 200, description: 'Rifa finalizada com sucesso.', type: Raffle})
+   @ApiResponse({ status: 404, description: 'Rifa não encontrada'})
+      @HttpCode(HttpStatus.OK)
+  async finalizeRaffle(@Param('raffleId', ParseIntPipe) raffleId: number): Promise<Raffle> {
     this.logger.log(`Finalizando rifa ${raffleId} (endpoint manual)...`);
     return await this.raffleService.finalizeRaffle(raffleId);
   }
-
-  @UseGuards(AuthGuard('jwt'))
+   @UseGuards(AuthGuard('jwt'))
   @Get('my/raffles')
-  async getRafflesPlayedByUser(@Request() req) { // Correto: @Request() sem o 'new'
+    @ApiOperation({ summary: 'Lista todas as rifas jogadas pelo usuário'})
+      @ApiResponse({ status: 200, description: 'Lista das rifas jogadas.', type: [Object]})
+   @ApiBearerAuth()
+  async getRafflesPlayedByUser(@Request() req): Promise<any[]> { // Correto: @Request() sem o 'new'
     const userId = req.user.id;
     this.logger.log(`Buscando rifas jogadas pelo usuário ${userId}...`);
     const raffles = await this.raffleService.getRafflesPlayedByUser(userId);
-    return this.formatRafflesResponse(raffles);
+    return  raffles;
   }
 
-  @UseGuards(AuthGuard('jwt'))
+   @UseGuards(AuthGuard('jwt'))
   @Get('my/raffles/won')
-  async getWonRafflesByUser(@Request() req) { // Correto: @Request() sem o 'new'
+    @ApiOperation({ summary: 'Lista todas as rifas ganhas pelo usuário'})
+      @ApiResponse({ status: 200, description: 'Lista das rifas ganhas.', type: [Object]})
+   @ApiBearerAuth()
+  async getWonRafflesByUser(@Request() req): Promise<any[]> { // Correto: @Request() sem o 'new'
     const userId = req.user.id;
     this.logger.log(`Buscando rifas ganhas pelo usuário ${userId}...`);
     const raffles = await this.raffleService.getWonRafflesByUser(userId);
-    return this.formatRafflesResponse(raffles);
+       return  raffles;
   }
 
-  @UseGuards(AuthGuard('jwt'))
+   @UseGuards(AuthGuard('jwt'))
   @Get('my/raffles/lost')
-  async getLostRafflesByUser(@Request() req) { // Correto: @Request() sem o 'new'
+      @ApiOperation({ summary: 'Lista todas as rifas perdidas pelo usuário'})
+     @ApiResponse({ status: 200, description: 'Lista das rifas perdidas.', type: [Object]})
+  @ApiBearerAuth()
+  async getLostRafflesByUser(@Request() req): Promise<any[]> { // Correto: @Request() sem o 'new'
     const userId = req.user.id;
     this.logger.log(`Buscando rifas perdidas pelo usuário ${userId}...`);
     const raffles = await this.raffleService.getLostRafflesByUser(userId);
@@ -107,7 +163,7 @@ constructor(private readonly raffleService: RaffleService) {}
   }
 
   // Função auxiliar para formatar a resposta (igual ao getRafflesWithDetails)
-  private formatRafflesResponse(raffles: any[]): any[] {
+  private formatRafflesResponse(raffles: Raffle[]): any[] {
     return raffles.map((raffle) => {
       let winningTicketInfo: {
         ticketNumber: any;
@@ -165,11 +221,7 @@ constructor(private readonly raffleService: RaffleService) {}
         drawDate: raffle.drawDate,
         finished: raffle.finished,
         winningTicket: winningTicketInfo,
-        tickets: raffle.tickets.map((ticket) => ({
-          id: ticket.id,
-          ticketNumber: ticket.ticketNumber,
-          createdAt: ticket.createdAt,
-        })),
+        tickets: this.raffleService.formatRaffleTickets(raffle),
         createdAt: raffle.createdAt,
         updatedAt: raffle.updatedAt,
       };
@@ -178,35 +230,46 @@ constructor(private readonly raffleService: RaffleService) {}
 
   @UseGuards(AuthGuard('jwt'))
   @Get('my/data')
+  @ApiOperation({ summary: 'Lista todos os dados relacionados a rifas do usuário' })
+   @ApiResponse({ status: 200, description: 'Retorna todos os dados do usuário', type: Object })
+  @ApiBearerAuth()
   async getUserRaffleData(@Request() req) {
     const userId = req.user.id;
     this.logger.log(`Buscando todos os dados do usuário ${userId} relacionados à rifas...`);
     return await this.raffleService.getUserRaffleData(userId);
   }
 
-  @Post('team/system')
-  async createSystemTeamRaffle() {
-      this.logger.log('Criando rifa de equipes do sistema...');
-      return await this.raffleService.createTeamRaffle();
-  }
+    @Post('team/system')
+  @ApiOperation({ summary: 'Cria uma rifa de equipes do sistema' })
+   @ApiResponse({ status: 201, description: 'Rifa de equipes criada com sucesso', type: Raffle })
+    async createSystemTeamRaffle(): Promise<Raffle> {
+        this.logger.log('Criando rifa de equipes do sistema...');
+        return await this.raffleService.createTeamRaffle();
+    }
 
-  @Post(':raffleId/finalize-team')
-  @HttpCode(HttpStatus.OK)
-  async finalizeTeamRaffle(@Param('raffleId', ParseIntPipe) raffleId: number) {
-      this.logger.log(`Finalizando rifa de equipes ${raffleId} (endpoint manual)...`);
-      return await this.raffleService.finalizeTeamRaffle(raffleId);
-  }
+   @Post(':raffleId/finalize-team')
+      @ApiOperation({ summary: 'Finaliza manualmente uma rifa de equipes' })
+    @ApiResponse({ status: 200, description: 'Rifa de equipe finalizada com sucesso', type: Raffle })
+       @ApiResponse({ status: 404, description: 'Rifa não encontrada' })
+    @HttpCode(HttpStatus.OK)
+    async finalizeTeamRaffle(@Param('raffleId', ParseIntPipe) raffleId: number) : Promise<Raffle> {
+        this.logger.log(`Finalizando rifa de equipes ${raffleId} (endpoint manual)...`);
+        return await this.raffleService.finalizeTeamRaffle(raffleId);
+    }
 
   @Get(':raffleId/teams')
-  async getRaffleTeams(@Param('raffleId', ParseIntPipe) raffleId: number) {
-      this.logger.log(`Buscando equipes da rifa ${raffleId}...`);
-      return await this.raffleService.getRaffleTeams(raffleId);
-  }
-
-  @Get(':raffleId/teams-with-availability')
-  async getRaffleTeamsWithAvailability(@Param('raffleId', ParseIntPipe) raffleId: number) {
-      this.logger.log(`Buscando equipes da rifa ${raffleId} com disponibilidade...`);
-      return await this.raffleService.getRaffleTeamsWithAvailability(raffleId);
-  }  
-
+    @ApiOperation({ summary: 'Lista as equipes de uma rifa específica' })
+    @ApiResponse({ status: 200, description: 'Retorna os times da rifa.' })
+    async getRaffleTeams(@Param('raffleId', ParseIntPipe) raffleId: number) {
+        this.logger.log(`Buscando equipes da rifa ${raffleId}...`);
+        return await this.raffleService.getRaffleTeams(raffleId);
+    }
+      
+@Get(':raffleId/teams-with-availability')
+  @ApiOperation({ summary: 'Busca as equipes com os bilhetes disponíveis e seus compradores.' })
+  @ApiResponse({ status: 200, description: 'Lista de equipes e bilhetes disponíveis.' })
+    async getRaffleTeamsWithAvailability(@Param('raffleId', ParseIntPipe) raffleId: number) {
+        this.logger.log(`Buscando equipes da rifa ${raffleId} com disponibilidade...`);
+        return await this.raffleService.getRaffleTeamsWithAvailability(raffleId);
+    }  
 }

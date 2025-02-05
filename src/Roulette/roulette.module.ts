@@ -11,6 +11,7 @@
     import { Seed } from 'src/models/seed.model';
     import { GeneratedNumber } from 'src/models/generated-number.model';
     import { BetGameRoundSeed } from '../models/bet/bet-game-round.model-seed';
+    
 @Module({
   imports: [SequelizeModule.forFeature([RouletteRound, RouletteBet, User, BlockchainHash, Seed, GeneratedNumber, BetGameRoundSeed])],
   providers: [RouletteService, BlockchainUtil],

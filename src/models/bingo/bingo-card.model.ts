@@ -14,6 +14,9 @@ import { BingoNumber } from './bingo-number.model';
 
 @Table
 export class BingoCard extends Model {
+    cardType(card: BingoCard, number: number, bingoGame: BingoGame, cardType: any) {
+        throw new Error('Method not implemented.');
+    }
   @Column({
     type: DataType.INTEGER,
     autoIncrement: true,

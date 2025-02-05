@@ -448,7 +448,7 @@ private formatWinningTicketInfo(raffle: Raffle): any {
   };
 }
 
-   private formatRaffleTickets(raffle: Raffle): any[] {
+   public formatRaffleTickets(raffle: Raffle): any[] {
     if (!raffle.tickets) {
         return [];
     }
