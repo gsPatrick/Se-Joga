@@ -30,6 +30,7 @@ import { BetGameRoundSeed } from './models/bet/bet-game-round.model-seed';
 import { BingoGameSeed } from './models/bingo/bingo_game_seeds';
 
 
+
 import { AuthModule } from './Auth/auth.module';
 import { RaffleModule } from './Raflle/raffle.module';
 import { HashModule } from './hash/hash.module';
@@ -37,7 +38,7 @@ import { SeedModule } from './seed/seed.module';
 import { BingoModule } from './Bingo/bingo.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { DiceModule } from './Dice/dice.module';
-import { TestModule } from './RecentNumberSeed/test.module';
+// import { TestModule } from './RecentNumberSeed/test.module';
 import { BetModule } from './Bet/bet.module';
 
 
@@ -93,7 +94,7 @@ import { BetModule } from './Bet/bet.module';
     SeedModule,
     RaffleModule,
     DiceModule,
-    TestModule,
+    // TestModule,
     BingoModule,
     BetModule,
     

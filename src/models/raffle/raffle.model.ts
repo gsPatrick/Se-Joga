@@ -35,12 +35,6 @@ export class Raffle extends Model {
   raffleIdentifier!: string;
 
 // raffle.model.ts
-@ForeignKey(() => User)
-@Column({
-  type: DataType.INTEGER,
-  allowNull: true, // Mude para true
-})
-createdBy!: number;
 
   @BelongsTo(() => User)
   createdByUser!: User;

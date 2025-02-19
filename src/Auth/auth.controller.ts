@@ -1,10 +1,9 @@
 // src/auth/auth.controller.ts
-import { Controller, Post, Body, HttpCode, HttpStatus, UseGuards, BadRequestException, Get, ParseFloatPipe, Patch, Put, Req } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, UseGuards, BadRequestException, Get, ParseFloatPipe, Patch, Put, Req, Param } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { User } from '../models/user/user.model';
 import { AuthGuard } from '@nestjs/passport';
 import { Request } from 'express';
-
 
 @Controller('auth')
 export class AuthController {
@@ -50,5 +49,28 @@ export class AuthController {
   ) {
     if(amount == 0) throw new BadRequestException('O valor do deposito não pode ser zero')
     return this.authService.updateBalance((req.user as any).id, amount);
+  }
+
+  @Post('forgot-password')
+  async forgotPassword(@Body('email') email: string): Promise<{ resetToken: string }> {
+    try {
+      const resetToken = await this.authService.forgotPassword(email);
+      return { resetToken }; // Return the token in the response body.
+    } catch (error) {
+      throw error; // Let NestJS handle the error (e.g., NotFoundException).
+    }
+  }
+
+  @Post('reset-password/:token') // Define the route with the token as a parameter
+  async resetPassword(
+    @Param('token') token: string, // Extract the token from the URL parameter
+    @Body('newPassword') newPassword: string, // Extract the new password from the request body
+  ): Promise<void> {
+    try {
+      await this.authService.resetPassword(token, newPassword);
+      return; // Successfully reset password. Consider returning a success message.
+    } catch (error) {
+      throw error; // Let NestJS handle the error.
+    }
   }
 }

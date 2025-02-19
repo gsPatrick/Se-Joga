@@ -5,13 +5,19 @@ import { User, UserRole } from '../models/user/user.model';
 import * as bcrypt from 'bcrypt';
 import { Op } from 'sequelize';
 import { JwtService } from '@nestjs/jwt';
+import { v4 as uuidv4 } from 'uuid';
+//import { MailService } from '../mail/mail.service'; // Assuming you have a MailService - REMOVED
 
 @Injectable()
 export class AuthService {
+  private readonly resetPasswordTokens: Map<string, { userId: number; expiry: Date }> = new Map();
+
+
   constructor(
     @InjectModel(User)
     private userModel: typeof User,
-    private jwtService: JwtService, // Injete o JwtService no construtor
+    private jwtService: JwtService,
+    //private mailService: MailService // Inject MailService - REMOVED
   ) {}
 
   async signUp(userData: Partial<User>): Promise<User> {
@@ -132,4 +138,59 @@ export class AuthService {
     return user;
   }
 
+  async logout(): Promise<void> {
+    // Invalidate JWT (client-side usually handles this by removing the token)
+    // There's no server-side session management, so this function is mostly for placeholder/future use.
+    return;
+  }
+
+
+  async forgotPassword(email: string): Promise<string> { //Changed return type to string (the token)
+    const user = await this.userModel.findOne({ where: { email } });
+
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+
+    const resetToken = uuidv4();
+    const expiry = new Date();
+    expiry.setHours(expiry.getHours() + 1); // Token expires in 1 hour
+
+    this.resetPasswordTokens.set(resetToken, { userId: user.id, expiry });
+
+
+    // Send email with reset link - REMOVED
+    //const resetLink = `http://your-frontend-url/reset-password?token=${resetToken}`; // Replace with your frontend URL
+    //await this.mailService.sendPasswordResetEmail(user.email, resetLink); // Adapt this to your MailService method
+
+    return resetToken; // Return the reset token to the controller. The controller is now responsible for sending it to the Frontend.
+  }
+
+
+  async resetPassword(token: string, newPassword: string): Promise<void> {
+    const tokenData = this.resetPasswordTokens.get(token);
+
+    if (!tokenData) {
+      throw new BadRequestException('Token inválido.');
+    }
+
+    if (tokenData.expiry < new Date()) {
+      this.resetPasswordTokens.delete(token); // Remove expired token
+      throw new BadRequestException('Token expirado.');
+    }
+
+    const user = await this.userModel.findByPk(tokenData.userId);
+
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    user.password = hashedPassword;
+    await user.save();
+
+
+    this.resetPasswordTokens.delete(token); // Remove the token after use
+  }
 }

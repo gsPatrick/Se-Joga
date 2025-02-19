@@ -37,6 +37,8 @@ export class RaffleService {
     private sequelize: Sequelize,
   ) {}
 
+  
+
   async createSystemRaffle(endDate?: Date): Promise<Raffle> {
     // 1. Encontrar a hash mais recente
     const latestHash = await this.blockchainHashModel.findOne({
@@ -215,39 +217,42 @@ export class RaffleService {
       } else {
         // Compra para rifa de equipes
         if (typeof ticketData.quantityOrNumbers === 'number') {
-          throw new BadRequestException(
-            'Para rifas de equipe, forneça os números dos bilhetes.',
-          );
-        }
+           // Compra aleatória para rifa de equipes
+          quantity = ticketData.quantityOrNumbers;
+          if (raffle.soldTickets + quantity > raffle.totalTickets) {
+            throw new BadRequestException(
+              'Não há bilhetes suficientes disponíveis.',
+            );
+          }
+          ticketNumbers = this.generateUniqueTicketNumbers(raffle, quantity);
+        } else {
+          // Compra de bilhetes específicos para rifa de equipes
+          ticketNumbers = ticketData.quantityOrNumbers;
+          quantity = ticketNumbers.length;
 
-        ticketNumbers = ticketData.quantityOrNumbers;
-        quantity = ticketNumbers.length;
+          // Validar os números dos bilhetes para a rifa de equipes
+          const validTeamTicketNumbers = ticketNumbers.every((ticketNumber) => {
+            const num = parseInt(ticketNumber, 10);
+            return num >= 0 && num < raffle.totalTickets;
+          });
 
-        // Validar os números dos bilhetes para a rifa de equipes
-        const validTeamTicketNumbers = ticketNumbers.every((ticketNumber) => {
-          const num = parseInt(ticketNumber, 10);
-          return (
-            num >= 0 &&
-            num < raffle.totalTickets
-          );
-        });
+          if (!validTeamTicketNumbers) {
+            throw new BadRequestException(
+              'Números de bilhetes inválidos para a rifa de equipes.',
+            );
+          }
 
-        if (!validTeamTicketNumbers) {
-          throw new BadRequestException(
-            'Números de bilhetes inválidos para a rifa de equipes.',
+          // Verificar se os bilhetes já foram comprados
+          const existingTickets = raffle.tickets.filter((ticket) =>
+            ticketNumbers.includes(ticket.ticketNumber),
           );
-        }
-
-        // Verificar se os bilhetes já foram comprados
-        const existingTickets = raffle.tickets.filter((ticket) =>
-          ticketNumbers.includes(ticket.ticketNumber),
-        );
-        if (existingTickets.length > 0) {
-          throw new BadRequestException(
-            `Os seguintes bilhetes já foram comprados: ${existingTickets
-              .map((ticket) => ticket.ticketNumber)
-              .join(', ')}`,
-          );
+          if (existingTickets.length > 0) {
+            throw new BadRequestException(
+              `Os seguintes bilhetes já foram comprados: ${existingTickets
+                .map((ticket) => ticket.ticketNumber)
+                .join(', ')}`,
+            );
+          }
         }
       }
 
@@ -266,6 +271,10 @@ export class RaffleService {
         { transaction },
       );
 
+      this.logger.log(
+        `Registros RaffleTicket criados: ${createdTickets.map((t) => t.id).join(', ')}`,
+      );
+
       // 7. Atualizar o saldo do usuário
       await user.update(
         { balance: user.balance - raffle.ticketPrice * quantity },
@@ -279,6 +288,7 @@ export class RaffleService {
       );
 
       await transaction.commit();
+      await new Promise(resolve => setTimeout(resolve, 2000));
 
       this.logger.log(
         `Usuário ${userId} comprou ${quantity} bilhete(s) para a rifa ${raffleId}. Bilhetes: ${ticketNumbers.join(
@@ -312,167 +322,210 @@ export class RaffleService {
         do {
             ticketNumber = Math.floor(Math.random() * raffle.totalTickets).toString().padStart(raffle.totalTickets.toString().length, '0');
         } while (raffle.tickets && raffle.tickets.some(ticket => ticket.ticketNumber === ticketNumber));
-
+  
         return ticketNumber;
     }
 
     //Função para gerar numberos unicos, agora recebendo a quantidade
-    private generateUniqueTicketNumbers(
-        raffle: Raffle,
-        quantity: number,
-    ): string[] {
-        const ticketNumbers = new Set<string>();
-        while (ticketNumbers.size < quantity) {
-            const ticketNumber = Math.floor(Math.random() * raffle.totalTickets)
-            .toString()
-            .padStart(raffle.totalTickets.toString().length, '0');
-            if (
-                !raffle.tickets.some((ticket) => ticket.ticketNumber === ticketNumber)
-            ) {
-                ticketNumbers.add(ticketNumber);
-            }
+    private generateUniqueTicketNumbers(raffle: Raffle, quantity: number): string[] {
+      const ticketNumbers = new Set<string>();
+      while (ticketNumbers.size < quantity) {
+        let ticketNumber = Math.floor(Math.random() * raffle.totalTickets).toString();
+    
+        // Adiciona um zero à esquerda se o número for menor que 10
+        if (parseInt(ticketNumber, 10) < 10) {
+          ticketNumber = ticketNumber.padStart(2, '0');
         }
-        return Array.from(ticketNumbers);
+    
+        if (
+          !raffle.tickets.some((ticket) => ticket.ticketNumber === ticketNumber)
+        ) {
+          ticketNumbers.add(ticketNumber);
+        }
+      }
+      return Array.from(ticketNumbers);
     }
 
-
-async getRafflesWithDetails(filters: any = {}): Promise<any[]> {
-  const where: any = {};
-
-  // Aplicar filtros, se fornecidos
-  if (filters.finished !== undefined) {
-      where.finished = filters.finished === 'true';
-  }
-  if (filters.winnerUserId) {
-      where.winnerUserId = filters.winnerUserId;
-  }
-  if (filters.userId) {
-      where['$tickets.userId$'] = filters.userId;
-  }
-  if (filters.startDate) {
-      where.startDate = {
+    async getRafflesWithDetails(filters: any = {}): Promise<any[]> {
+      const where: any = {};
+    
+      // Aplicar filtros, se fornecidos
+      if (filters.finished !== undefined) {
+        where.finished = filters.finished === 'true';
+      }
+      if (filters.winnerUserId) {
+        where.winnerUserId = filters.winnerUserId;
+      }
+      if (filters.userId) {
+        where['$tickets.userId$'] = filters.userId;
+      }
+      if (filters.startDate) {
+        where.startDate = {
           [Op.gte]: new Date(filters.startDate),
-      };
-  }
-  if (filters.endDate) {
-      where.endDate = {
+        };
+      }
+      if (filters.endDate) {
+        where.endDate = {
           [Op.lte]: new Date(filters.endDate),
-      };
-  }
-
-  const raffles = await this.raffleModel.findAll({
-      include: [
+        };
+      }
+    
+      const raffles = await this.raffleModel.findAll({
+        include: [
           {
-              model: RaffleTicket,
-              as: 'tickets',
-              include: [{
-                  model: User,
-                  attributes: ['id', 'name', 'email'],
-              }],
+            model: RaffleTicket,
+            as: 'tickets',
+            include: [
+              {
+                model: User,
+                attributes: ['id', 'name', 'email'],
+              },
+            ],
+          },
+          /*{
+            model: User,
+            as: 'createdByUser',
+            attributes: ['id', 'name', 'email'],
+          },*/
+          {
+            model: User,
+            as: 'winnerUser',
+            attributes: ['id', 'name', 'email'],
           },
           {
-              model: User,
-              as: 'createdByUser',
-              attributes: ['id', 'name', 'email'],
+            model: RaffleNumber,
+            include: [
+              {
+                model: GeneratedNumber,
+                include: [
+                  {
+                    model: Seed,
+                    include: [
+                      {
+                        model: BlockchainHash,
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
           },
-          {
-              model: User,
-              as: 'winnerUser',
-              attributes: ['id', 'name', 'email'],
-          },
-          {
-              model: RaffleNumber,
-              include: [{
-                  model: GeneratedNumber,
-                  include: [{
-                      model: Seed,
-                      include: [{
-                          model: BlockchainHash,
-                      }],
-                  }],
-              }],
-          },
-      ],
-      where,
-      order: [['createdAt', 'DESC']],
-  });
-
-  return raffles.map(raffle => ({
-      id: raffle.id,
-      raffleIdentifier: raffle.raffleIdentifier,
-      type: raffle.type,
-      createdBy: raffle.createdByUser ? {
-          id: raffle.createdByUser.id,
-          name: raffle.createdByUser.name,
-          email: raffle.createdByUser.email
-      } : null,
-      winner: raffle.winnerUser ? {
-          id: raffle.winnerUser.id,
-          name: raffle.winnerUser.name,
-          email: raffle.winnerUser.email
-      } : null,
-      title: raffle.title,
-      description: raffle.description,
-      ticketPrice: raffle.ticketPrice,
-      totalTickets: raffle.totalTickets,
-      soldTickets: raffle.soldTickets,
-      startDate: raffle.startDate,
-      endDate: raffle.endDate,
-      drawDate: raffle.drawDate,
-      finished: raffle.finished,
-      winningTicket: this.formatWinningTicketInfo(raffle),
-      tickets: this.formatRaffleTickets(raffle),
-      createdAt: raffle.createdAt,
-      updatedAt: raffle.updatedAt,
-  }));
-}
-
-private formatWinningTicketInfo(raffle: Raffle): any {
-  if (!raffle.raffleNumbers || raffle.raffleNumbers.length === 0) {
-    return null;
-  }
-
-  const generatedNumber = raffle.raffleNumbers[0].generatedNumber;
-  const seed = generatedNumber ? generatedNumber.seed : null;
-  const blockchainHash = seed ? seed.blockchainHash : null;
-
-  return {
-    ticketNumber: raffle.winningTicket,
-    numberId: generatedNumber ? generatedNumber.id : null,
-    dezena: generatedNumber ? generatedNumber.number.toString().slice(-2) : null,
-    generatedNumber: generatedNumber ? generatedNumber.number : null,
-    sequence: generatedNumber ? generatedNumber.sequence : null,
-    seed: seed ? seed.seed : null,
-    hash: blockchainHash ? blockchainHash.hash : null,
-    hashTimestamp: blockchainHash ? blockchainHash.timestamp : null,
-  };
-}
-
-   public formatRaffleTickets(raffle: Raffle): any[] {
-    if (!raffle.tickets) {
-        return [];
+        ],
+        where,
+        order: [['createdAt', 'DESC']],
+      });
+    
+      return raffles.map((raffle) => {
+        let winningTeam = null; // Inicializa winningTeam
+        if (raffle.type === 'equipes' && raffle.finished) {
+          const winningDezena = raffle.winningTicket;
+          const formattedTeams = this.getFormattedTeams(raffle);
+          const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningDezena);
+          winningTeam = formattedTeams[winningTeamName];
+        }
+    
+        return {
+          id: raffle.id,
+          raffleIdentifier: raffle.raffleIdentifier,
+          type: raffle.type,
+          /* createdBy: raffle.createdByUser
+            ? {
+                id: raffle.createdByUser.id,
+                name: raffle.createdByUser.name,
+                email: raffle.createdByUser.email,
+              }
+            : null,*/
+          winner: raffle.winnerUser
+            ? {
+                id: raffle.winnerUser.id,
+                name: raffle.winnerUser.name,
+                email: raffle.winnerUser.email,
+              }
+            : null,
+          winningTeam: winningTeam, // Inclui informações da equipe vencedora
+          title: raffle.title,
+          description: raffle.description,
+          ticketPrice: raffle.ticketPrice,
+          totalTickets: raffle.totalTickets,
+          soldTickets: raffle.soldTickets,
+          startDate: raffle.startDate,
+          endDate: raffle.endDate,
+          drawDate: raffle.drawDate,
+          finished: raffle.finished,
+          winningTicket: this.formatWinningTicketInfo(raffle),
+          tickets: this.formatRaffleTickets(raffle),
+          createdAt: raffle.createdAt,
+          updatedAt: raffle.updatedAt,
+        };
+      });
     }
 
+    private formatWinningTicketInfo(raffle: Raffle): any {
+      if (!raffle.finished) {
+        return null; // Retorna null se a rifa não estiver finalizada
+      }
+      if (!raffle.raffleNumbers || raffle.raffleNumbers.length === 0) {
+        return null;
+      }
+    
+      const generatedNumber = raffle.raffleNumbers[0].generatedNumber;
+      const seed = generatedNumber ? generatedNumber.seed : null;
+      const blockchainHash = seed ? seed.blockchainHash : null;
+    
+      return {
+        ticketNumber: raffle.winningTicket,
+        numberId: generatedNumber ? generatedNumber.id : null,
+        dezena: generatedNumber ? generatedNumber.number.toString().slice(-2) : null,
+        generatedNumber: generatedNumber ? generatedNumber.number : null,
+        sequence: generatedNumber ? generatedNumber.sequence : null,
+        // seed: seed ? seed.seed : null,
+        hash: blockchainHash ? blockchainHash.hash : null,
+        hashTimestamp: blockchainHash ? blockchainHash.timestamp : null,
+      };
+    }
+
+public formatRaffleTickets(raffle: Raffle): any[] {
+  if (!raffle.tickets) {
+    return [];
+  }
+
+  if (raffle.type === 'equipes') {
     const formattedTeams = this.getFormattedTeams(raffle);
 
-
     return raffle.tickets.map(ticket => {
-        let team = formattedTeams[this.getTeamNameByTicketNumber(raffle,ticket.ticketNumber)];
+      const teamName = this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber);
+      const team = formattedTeams[teamName];
 
-        return {
-            id: ticket.id,
-            ticketNumber: ticket.ticketNumber,
-            user: ticket.user ? {
-                id: ticket.user.id,
-                name: ticket.user.name,
-                email: ticket.user.email,
-            } : null,
-            team: team,
-            createdAt: ticket.createdAt,
-        };
+      return {
+        id: ticket.id,
+        ticketNumber: ticket.ticketNumber,
+        user: ticket.user ? {
+          id: ticket.user.id,
+          name: ticket.user.name,
+          email: ticket.user.email,
+        } : null,
+        team: team ? { // Verifica se o time existe antes de acessar as propriedades
+          teamName: team.teamName,
+          tickets: team.tickets,
+          members: team.members,
+        } : null,
+        createdAt: ticket.createdAt,
+      };
     });
+  } else {
+    // Formatação para rifas tradicionais
+    return raffle.tickets.map(ticket => ({
+      id: ticket.id,
+      ticketNumber: ticket.ticketNumber,
+      user: ticket.user ? {
+        id: ticket.user.id,
+        name: ticket.user.name,
+        email: ticket.user.email,
+      } : null,
+      createdAt: ticket.createdAt,
+    }));
+  }
 }
-
 
 async getRaffleByIdWithDetails(raffleId: number): Promise<any> {
   const raffle = await this.raffleModel.findByPk(raffleId, {
@@ -487,11 +540,11 @@ async getRaffleByIdWithDetails(raffleId: number): Promise<any> {
           },
         ],
       },
-      {
+      /*{
         model: User,
         as: 'createdByUser',
         attributes: ['id', 'name', 'email'],
-      },
+      },*/
       {
         model: User,
         as: 'winnerUser',
@@ -522,17 +575,24 @@ async getRaffleByIdWithDetails(raffleId: number): Promise<any> {
     throw new NotFoundException('Rifa não encontrada.');
   }
 
+  let winningTeam = null; // Inicializa winningTeam
+    if (raffle.type === 'equipes' && raffle.finished) {
+      const winningDezena = raffle.winningTicket;
+      const formattedTeams = this.getFormattedTeams(raffle);
+      const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningDezena);
+      winningTeam = formattedTeams[winningTeamName];
+    }
   return {
     id: raffle.id,
     raffleIdentifier: raffle.raffleIdentifier,
     type: raffle.type,
-    createdBy: raffle.createdByUser
+    /*createdBy: raffle.createdByUser
       ? {
           id: raffle.createdByUser.id,
           name: raffle.createdByUser.name,
           email: raffle.createdByUser.email,
         }
-      : null,
+      : null,*/
     winner: raffle.winnerUser
       ? {
           id: raffle.winnerUser.id,
@@ -540,6 +600,7 @@ async getRaffleByIdWithDetails(raffleId: number): Promise<any> {
           email: raffle.winnerUser.email,
         }
       : null,
+    winningTeam: winningTeam, // Inclui informações da equipe vencedora
     title: raffle.title,
     description: raffle.description,
     ticketPrice: raffle.ticketPrice,
@@ -556,109 +617,139 @@ async getRaffleByIdWithDetails(raffleId: number): Promise<any> {
   };
 }
 
-  async finalizeRaffle(raffleId: number, transactionHost?: any): Promise<Raffle> {
-    const transaction = transactionHost
-      ? transactionHost
-      : await this.sequelize.transaction();
-    try {
-      // 1. Buscar a rifa
-      const raffle = await this.raffleModel.findByPk(raffleId, {
-        include: [
-          {
-            model: RaffleTicket,
-          },
-        ],
-        transaction,
-      });
+async finalizeRaffle(raffleId: number, transactionHost?: any): Promise<Raffle> {
+  const transaction = transactionHost
+    ? transactionHost
+    : await this.sequelize.transaction();
+  try {
+    // 1. Buscar a rifa
+    let raffle = await this.raffleModel.findByPk(raffleId, {
+      include: [
+        {
+          model: RaffleTicket,
+        },
+        {
+          model: User,
+          as: 'winnerUser',
+          attributes: ['id', 'name', 'email'],
+        },
+      ],
+      transaction,
+    });
 
-      if (!raffle) {
-        throw new NotFoundException('Rifa não encontrada.');
-      }
+    if (!raffle) {
+      throw new NotFoundException('Rifa não encontrada.');
+    }
 
-      // 2. Verificar se a rifa já foi finalizada
-      if (raffle.finished) {
-        throw new ConflictException('Rifa já finalizada.');
-      }
+    // 2. Verificar se a rifa já foi finalizada
+    if (raffle.finished) {
+      throw new ConflictException('Rifa já finalizada.');
+    }
 
-      // 3. Verificar se a data do sorteio já passou ou se todos os bilhetes foram vendidos
-      const now = new Date();
-      if (
-        (!raffle.endDate || raffle.endDate > now) &&
-        raffle.soldTickets < raffle.totalTickets
-      ) {
-        throw new BadRequestException(
-          'A rifa ainda não atingiu a data de sorteio ou todos os bilhetes não foram vendidos.',
-        );
-      }
-
-      // 4. Usar a dezena do winningTicket (definida na criação da rifa)
-      const winningDezena = raffle.winningTicket;
-
-      // 5. Encontrar o bilhete vencedor
-      const winningTicket = raffle.tickets.find(
-        (ticket) => ticket.ticketNumber === winningDezena,
-      );
-
-      // 6. Atualizar a rifa
-      if (winningTicket) {
-        raffle.winnerUserId = winningTicket.userId;
-
-        // Carregar as informações do usuário vencedor
-        const winnerUser = await this.userModel.findByPk(
-          winningTicket.userId,
-          {
-            attributes: ['id', 'name', 'email'], // Carrega apenas os atributos necessários
-            transaction,
-          },
-        );
-
-        if (!winnerUser) {
-          throw new NotFoundException('Usuário vencedor não encontrado.');
-        }
-
-        // **Associar o usuário vencedor ao objeto raffle**
-        raffle.winnerUser = winnerUser;
-
-        // Creditar o prêmio ao usuário vencedor - aqui você define a lógica do prêmio
-        const prizeAmount = raffle.ticketPrice * raffle.totalTickets * 0.7; // Exemplo: 70% do valor total dos bilhetes
-        await winnerUser.update(
-          { balance: winnerUser.balance + prizeAmount },
-          { transaction },
-        );
-        this.logger.log(
-          `Usuário ${winnerUser.id} ganhou a rifa ${raffle.id} e recebeu ${prizeAmount}`,
-        );
-      }
-
-      raffle.winningTicket = winningDezena; // winningTicket é atualizado para ficar consistente
-      raffle.finished = true;
-      await raffle.save({ transaction });
-
-      if (!transactionHost) await transaction.commit();
-
-      this.logger.log(`Rifa ${raffleId} finalizada com sucesso.`);
-
-      return raffle;
-    } catch (error) {
-      if (!transactionHost) await transaction.rollback();
-
-      if (
-        error instanceof NotFoundException ||
-        error instanceof BadRequestException ||
-        error instanceof ConflictException
-      ) {
-        throw error;
-      }
-
-      this.logger.error(
-        `Erro ao finalizar a rifa ${raffleId}: ${(error as any).message}`,
-        (error as any).stack,
-      );
-      throw new InternalServerErrorException(
-        'Erro ao finalizar a rifa. Por favor, tente novamente.',
+    // 3. Verificar se a data do sorteio já passou ou se todos os bilhetes foram vendidos
+    const now = new Date();
+    if (
+      (!raffle.endDate || raffle.endDate > now) &&
+      raffle.soldTickets < raffle.totalTickets
+    ) {
+      throw new BadRequestException(
+        'A rifa ainda não atingiu a data de sorteio ou todos os bilhetes não foram vendidos.',
       );
     }
+
+    // 4. Usar a dezena do winningTicket (definida na criação da rifa)
+    const winningDezena = raffle.winningTicket;
+    this.logger.log(`Dezena vencedora: ${winningDezena}`);
+
+    // 5. Encontrar o bilhete vencedor
+    // **REMOVER INCLUDE DESNECESSÁRIO E FAZER A BUSCA DOS TICKETS MANUALMENTE**
+    const tickets = await RaffleTicket.findAll({
+      where: { raffleId: raffle.id },
+      transaction,
+    });
+
+    this.logger.log(
+      `Bilhetes na rifa: ${tickets
+        .map((ticket) => ticket.ticketNumber)
+        .join(', ')}`,
+    );
+
+      let winningTicket: RaffleTicket | null = null;
+      for (const ticket of tickets) {
+          this.logger.log(`Comparando: winningDezena=${winningDezena}, ticket.ticketNumber=${ticket.ticketNumber}`); //THIS LINE WAS ADD
+        if (String(ticket.ticketNumber).trim() === String(winningDezena).trim()) {
+          winningTicket = ticket;
+          break;
+        }
+      }
+
+    if (winningTicket) {
+      this.logger.log(
+        `Bilhete vencedor encontrado: ${winningTicket.ticketNumber}, userId: ${winningTicket.userId}`,
+      );
+
+      raffle.winnerUserId = winningTicket.userId;
+
+      // Carregar as informações do usuário vencedor
+      const winnerUser = await this.userModel.findByPk(
+        winningTicket.userId,
+        {
+          attributes: ['id', 'name', 'email'], // Carrega apenas os atributos necessários
+          transaction,
+        },
+      );
+
+      if (!winnerUser) {
+        throw new NotFoundException('Usuário vencedor não encontrado.');
+      }
+
+      // **Associar o usuário vencedor ao objeto raffle**
+      raffle.winnerUser = winnerUser;
+
+      // Creditar o prêmio ao usuário vencedor - aqui você define a lógica do prêmio
+      const prizeAmount = raffle.ticketPrice * raffle.totalTickets * 0.7; // Exemplo: 70% do valor total dos bilhetes
+      await winnerUser.update(
+        { balance: winnerUser.balance + prizeAmount },
+        { transaction },
+      );
+      this.logger.log(
+        `Usuário ${winnerUser.id} ganhou a rifa ${raffle.id} e recebeu ${prizeAmount}`,
+      );
+          // Persiste explicitamente o winnerUserId
+      await this.raffleModel.update({ winnerUserId: raffle.winnerUserId, finished: true, winningTicket: winningDezena }, { where: { id: raffleId }, transaction });
+    } else {
+          this.logger.log(`Bilhete vencedor NÃO encontrado para a dezena ${winningDezena}`);
+    }
+
+    raffle.winningTicket = winningDezena; // winningTicket é atualizado para ficar consistente
+    raffle.finished = true;
+    await raffle.save({ transaction });
+
+    if (!transactionHost) await transaction.commit();
+
+    this.logger.log(`Rifa ${raffleId} finalizada com sucesso.`);
+
+    return raffle;
+  } catch (error) {
+    if (!transactionHost) await transaction.rollback();
+
+    if (
+      error instanceof NotFoundException ||
+      error instanceof BadRequestException ||
+      error instanceof ConflictException
+    ) {
+      throw error;
+    }
+
+    this.logger.error(
+      `Erro ao finalizar a rifa ${raffleId}: ${(error as any).message}`,
+      (error as any).stack,
+    );
+    throw new InternalServerErrorException(
+      'Erro ao finalizar a rifa. Por favor, tente novamente.',
+    );
   }
+}
 
    // **Cron job para finalizar rifas (modificado)**
    @Cron(CronExpression.EVERY_MINUTE) // Executa a cada minuto
@@ -1256,10 +1347,10 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
             );
          
               // Enviar notificação ao vencedor principal
-            await this.sendNotification(
-              winnerUser.id,
-              `Parabéns! Você ganhou a rifa de equipe ${raffle.id} com o bilhete ${winningDezena}! O valor de ${mainPrize} foi creditado em sua conta.`,
-            );
+             // await this.sendNotification(
+             //  winnerUser.id,
+             //  `Parabéns! Você ganhou a rifa de equipe ${raffle.id} com o bilhete ${winningDezena}! O valor de ${mainPrize} foi creditado em sua conta.`,
+            //);
             
         }  else {
              throw new NotFoundException('Usuário vencedor não encontrado.');
@@ -1280,32 +1371,32 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
                 { balance: secondaryWinner.balance + secondaryPrize },
                 { transaction },
               );
-             await this.sendNotification(
-              secondaryWinner.id,
-              `Você ganhou um prêmio secundário na rifa de equipe ${raffle.id}! O valor de ${secondaryPrize} foi creditado em sua conta.`,
-            );
+            // await this.sendNotification(
+            //  secondaryWinner.id,
+            //  `Você ganhou um prêmio secundário na rifa de equipe ${raffle.id}! O valor de ${secondaryPrize} foi creditado em sua conta.`,
+            //);
             } else {
               throw new NotFoundException('Usuário vencedor secundário não encontrado.');
              }
           }
         }
          // Enviar notificação para todos os participantes que não tiveram bilhete vencedor
-         for (const ticket of raffle.tickets) {
-          if(!winningTeamTickets.find(winTicket => winTicket.id === ticket.id)){
-             await this.sendNotification(
-               ticket.userId,
-               `A rifa de equipe ${raffle.id} foi finalizada. A dezena vencedora foi ${winningDezena}, pertencente à equipe ${winningTeam}. Infelizmente, você não ganhou desta vez.`,
-            );
-          }
-        }
+        // for (const ticket of raffle.tickets) {
+        //  if(!winningTeamTickets.find(winTicket => winTicket.id === ticket.id)){
+        //     await this.sendNotification(
+        //       ticket.userId,
+        //       `A rifa de equipe ${raffle.id} foi finalizada. A dezena vencedora foi ${winningDezena}, pertencente à equipe ${winningTeam}. Infelizmente, você não ganhou desta vez.`,
+        //    );
+        //  }
+        // }
       }else{
        // Enviar notificação para todos os participantes que não tiveram bilhete vencedor
-       for (const ticket of raffle.tickets) {
-          await this.sendNotification(
-            ticket.userId,
-            `A rifa de equipe ${raffle.id} foi finalizada. A dezena vencedora foi ${winningDezena}, pertencente à equipe ${winningTeam}. Infelizmente, você não ganhou desta vez.`,
-          );
-        }
+      // for (const ticket of raffle.tickets) {
+      //    await this.sendNotification(
+      //      ticket.userId,
+      //      `A rifa de equipe ${raffle.id} foi finalizada. A dezena vencedora foi ${winningDezena}, pertencente à equipe ${winningTeam}. Infelizmente, você não ganhou desta vez.`,
+      //    );
+      //  }
     }
 
       // Atualizar os dados da rifa e salvar
