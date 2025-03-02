@@ -484,48 +484,96 @@ export class RaffleService {
       };
     }
 
-public formatRaffleTickets(raffle: Raffle): any[] {
-  if (!raffle.tickets) {
-    return [];
-  }
+    public formatRaffleTickets(raffle: Raffle): any[] {
+      if (!raffle.tickets) {
+        return [];
+      }
+    
+      if (raffle.type === 'equipes') { // Condição para rifas de EQUIPES
+        const formattedTeams = this.getFormattedTeams(raffle);
+    
+        return raffle.tickets.map(ticket => {
+          const teamName = this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber);
+          const team = formattedTeams[teamName];
+    
+          return {
+            id: ticket.id,
+            ticketNumber: ticket.ticketNumber,
+            user: ticket.user ? {
+              id: ticket.user.id,
+              name: ticket.user.name,
+              email: ticket.user.email,
+            } : null,
+            team: team ? { // Verifica se o time existe antes de acessar as propriedades
+              teamName: team.teamName,
+              tickets: team.tickets,
+              members: team.members,
+            } : null,
+            createdAt: ticket.createdAt,
+          };
+        });
+      } else { // Formatação para rifas TRADICIONAIS (CORREÇÃO AQUI)
+        // Formatação para rifas tradicionais
+        return raffle.tickets.map(ticket => ({
+          id: ticket.id,
+          ticketNumber: ticket.ticketNumber,
+          user: ticket.user ? {
+            id: ticket.user.id,
+            name: ticket.user.name,
+            email: ticket.user.email,
+          } : null,
+          createdAt: ticket.createdAt,
+        }));
+      }
+    }
 
-  if (raffle.type === 'equipes') {
-    const formattedTeams = this.getFormattedTeams(raffle);
-
-    return raffle.tickets.map(ticket => {
-      const teamName = this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber);
-      const team = formattedTeams[teamName];
-
-      return {
-        id: ticket.id,
-        ticketNumber: ticket.ticketNumber,
-        user: ticket.user ? {
-          id: ticket.user.id,
-          name: ticket.user.name,
-          email: ticket.user.email,
-        } : null,
-        team: team ? { // Verifica se o time existe antes de acessar as propriedades
-          teamName: team.teamName,
-          tickets: team.tickets,
-          members: team.members,
-        } : null,
-        createdAt: ticket.createdAt,
+    async getRafflesOfTheDayWithFilters(
+      date: Date,
+      status: 'abertas' | 'fechadas' | 'ambos', // Modificado para incluir 'ambos'
+      type: 'tradicional' | 'equipes',
+    ): Promise<any[]> {
+      const where: any = {};
+  
+      if (!date) {
+        throw new BadRequestException('A data é obrigatória.');
+      }
+  
+      if (!status) {
+        throw new BadRequestException('O status (abertas, fechadas ou ambos) é obrigatório.'); // Mensagem atualizada
+      }
+  
+      if (!type) {
+        throw new BadRequestException('O tipo de rifa (tradicional ou equipes) é obrigatório.');
+      }
+  
+  
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999);
+  
+  
+      where.createdAt = {
+        [Op.gte]: startOfDay,
+        [Op.lte]: endOfDay,
       };
-    });
-  } else {
-    // Formatação para rifas tradicionais
-    return raffle.tickets.map(ticket => ({
-      id: ticket.id,
-      ticketNumber: ticket.ticketNumber,
-      user: ticket.user ? {
-        id: ticket.user.id,
-        name: ticket.user.name,
-        email: ticket.user.email,
-      } : null,
-      createdAt: ticket.createdAt,
-    }));
-  }
-}
+  
+      if (status === 'abertas') {
+        where.finished = false;
+      } else if (status === 'fechadas') {
+        where.finished = true;
+      } else if (status === 'ambos') {
+        // Não adiciona filtro 'finished' para 'ambos'
+      }
+  
+      if (type === 'tradicional') {
+        where.type = 'tradicional';
+      } else if (type === 'equipes') {
+        where.type = 'equipes';
+      }
+  
+      return this.getRafflesWithDetails(where);
+    }
 
 async getRaffleByIdWithDetails(raffleId: number): Promise<any> {
   const raffle = await this.raffleModel.findByPk(raffleId, {

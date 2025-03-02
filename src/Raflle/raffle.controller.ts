@@ -10,13 +10,15 @@ import {
   HttpStatus,
   UseGuards,
   InternalServerErrorException,
+  Query,
+  BadRequestException, // Importe Query
 } from '@nestjs/common';
 import { Request } from '@nestjs/common';
 import { RaffleService } from './raffle.service';
 import { AuthGuard } from '@nestjs/passport';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiBody } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiResponse, ApiBody, ApiQuery } from '@nestjs/swagger'; // Importe ApiQuery
 import { Raffle } from 'src/models/raffle/raffle.model';
-import { RaffleTicket } from 'src/models/raffle/raffle-ticket.model';
+import { RaffleTicket } from 'src/models/raffle/raffle-ticket.model'
 
 @ApiTags('raffles')
 @Controller('raffles')
@@ -47,6 +49,55 @@ export class RaffleController {
         'Erro ao criar a rifa de equipe.',
       );
     }
+  }
+
+  @Get('filtered') // Novo endpoint: /raffles/filtered
+  @ApiOperation({ summary: 'Lista rifas filtradas por tipo (tradicional ou equipes)' })
+  @ApiQuery({ name: 'type', enum: ['tradicional', 'equipes'], description: 'Tipo de rifa a ser filtrada' }) // Documentando o query parameter
+  @ApiResponse({ status: 200, description: 'Retorna as rifas filtradas por tipo.', type: [Raffle] })
+  async getFilteredRafflesByType(
+    @Query('type') type: 'tradicional' | 'equipes', // Extrai o query parameter 'type'
+  ): Promise<any[]> {
+    this.logger.log(`Buscando rifas do tipo: ${type}`);
+    return await this.raffleService.getRafflesWithDetails({ type }); // Passa o filtro 'type' para o service
+  }
+
+  @Get(':raffleId')
+  @ApiOperation({ summary: 'Busca detalhes de uma rifa específica por ID' })
+  @ApiResponse({ status: 200, description: 'Retorna os detalhes da rifa.', type: Raffle })
+  @ApiResponse({ status: 404, description: 'Rifa não encontrada' })
+  async getRaffleByIdWithDetails(
+    @Param('raffleId', ParseIntPipe) raffleId: number,
+  ): Promise<any> {
+    this.logger.log(`Buscando detalhes da rifa com ID: ${raffleId}...`);
+    return await this.raffleService.getRaffleByIdWithDetails(raffleId);
+  }
+
+  @Get('day-filtered')
+  @ApiOperation({ summary: 'Lista as rifas do dia com filtros obrigatórios, incluindo status "ambos"' }) // Descrição atualizada
+  @ApiQuery({ name: 'date', type: 'string', format: 'date', description: 'Data para filtrar as rifas (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'status', enum: ['abertas', 'fechadas', 'ambos'], description: 'Filtrar por status da rifa (abertas, fechadas ou ambos)' }) // Enum atualizado
+  @ApiQuery({ name: 'type', enum: ['tradicional', 'equipes'], description: 'Filtrar por tipo de rifa (tradicional ou equipes)' })
+  @ApiResponse({ status: 200, description: 'Retorna as rifas do dia filtradas.', type: [Raffle] })
+  async getRafflesOfTheDayWithFilters(
+    @Query('date', ParseIntPipe) date: Date,
+    @Query('status') status: 'abertas' | 'fechadas' | 'ambos', // Tipo atualizado para incluir 'ambos'
+    @Query('type') type: 'tradicional' | 'equipes',
+  ): Promise<any[]> {
+
+    this.logger.log(`Buscando rifas do dia com filtros: date=${date}, status=${status}, type=${type}`);
+
+    if (!date) {
+        throw new BadRequestException('A data é obrigatória.');
+    }
+    if (!status) {
+        throw new BadRequestException('O status (abertas, fechadas ou ambos) é obrigatório.'); // Mensagem atualizada
+    }
+    if (!type) {
+        throw new BadRequestException('O tipo de rifa (tradicional ou equipes) é obrigatório.');
+    }
+
+    return await this.raffleService.getRafflesOfTheDayWithFilters(date, status, type);
   }
 
   @UseGuards(AuthGuard('jwt'))
