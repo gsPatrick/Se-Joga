@@ -348,16 +348,19 @@ export class RaffleService {
 
     async getRafflesWithDetails(filters: any = {}): Promise<any[]> {
       const where: any = {};
-    
+  
       // Aplicar filtros, se fornecidos
-      if (filters.finished !== undefined) {
-        where.finished = filters.finished === 'true';
+      if (filters.finished !== undefined) { // Filtro de status de finalização EXISTE, usa o valor passado
+        where.finished = filters.finished;
       }
       if (filters.winnerUserId) {
         where.winnerUserId = filters.winnerUserId;
       }
       if (filters.userId) {
         where['$tickets.userId$'] = filters.userId;
+      }
+      if (filters.type) {
+        where.type = filters.type;
       }
       if (filters.startDate) {
         where.startDate = {
@@ -369,7 +372,11 @@ export class RaffleService {
           [Op.lte]: new Date(filters.endDate),
         };
       }
-    
+      // FILTRO DE STATUS DE FINALIZAÇÃO JÁ ESTAVA SENDO APLICADO AQUI (CORREÇÃO ANTERIOR), APENAS ASSEGURANDO QUE ESTÁ CORRETO
+      // if (filters.finished !== undefined) {
+      //   where.finished = filters.finished === 'true'; // <--- CORREÇÃO: REMOVENDO '=== "true"'
+      // }
+  
       const raffles = await this.raffleModel.findAll({
         include: [
           {
@@ -411,19 +418,19 @@ export class RaffleService {
             ],
           },
         ],
-        where,
+        where, // APLICANDO A CLAUSULA 'WHERE' COM TODOS OS FILTROS (tipo, data, finished)
         order: [['createdAt', 'DESC']],
       });
-    
+  
       return raffles.map((raffle) => {
-        let winningTeam = null; // Inicializa winningTeam
+        let winningTeam = null;
         if (raffle.type === 'equipes' && raffle.finished) {
           const winningDezena = raffle.winningTicket;
           const formattedTeams = this.getFormattedTeams(raffle);
           const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningDezena);
           winningTeam = formattedTeams[winningTeamName];
         }
-    
+  
         return {
           id: raffle.id,
           raffleIdentifier: raffle.raffleIdentifier,
@@ -442,7 +449,7 @@ export class RaffleService {
                 email: raffle.winnerUser.email,
               }
             : null,
-          winningTeam: winningTeam, // Inclui informações da equipe vencedora
+          winningTeam: winningTeam,
           title: raffle.title,
           description: raffle.description,
           ticketPrice: raffle.ticketPrice,
@@ -488,14 +495,16 @@ export class RaffleService {
       if (!raffle.tickets) {
         return [];
       }
-    
+  
+       console.log("TIPO DA RIFA NO FORMATRAFFLETICKETS:", raffle.type); // REMOVA O COMENTÁRIO PARA VERIFICAR O TIPO DA RIFA
+  
       if (raffle.type === 'equipes') { // Condição para rifas de EQUIPES
         const formattedTeams = this.getFormattedTeams(raffle);
-    
+  
         return raffle.tickets.map(ticket => {
           const teamName = this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber);
           const team = formattedTeams[teamName];
-    
+  
           return {
             id: ticket.id,
             ticketNumber: ticket.ticketNumber,
@@ -512,7 +521,7 @@ export class RaffleService {
             createdAt: ticket.createdAt,
           };
         });
-      } else { // Formatação para rifas TRADICIONAIS (CORREÇÃO AQUI)
+      } else { // Formatação para rifas TRADICIONAIS
         // Formatação para rifas tradicionais
         return raffle.tickets.map(ticket => ({
           id: ticket.id,
@@ -525,54 +534,6 @@ export class RaffleService {
           createdAt: ticket.createdAt,
         }));
       }
-    }
-
-    async getRafflesOfTheDayWithFilters(
-      date: Date,
-      status: 'abertas' | 'fechadas' | 'ambos', // Modificado para incluir 'ambos'
-      type: 'tradicional' | 'equipes',
-    ): Promise<any[]> {
-      const where: any = {};
-  
-      if (!date) {
-        throw new BadRequestException('A data é obrigatória.');
-      }
-  
-      if (!status) {
-        throw new BadRequestException('O status (abertas, fechadas ou ambos) é obrigatório.'); // Mensagem atualizada
-      }
-  
-      if (!type) {
-        throw new BadRequestException('O tipo de rifa (tradicional ou equipes) é obrigatório.');
-      }
-  
-  
-      const startOfDay = new Date(date);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(date);
-      endOfDay.setHours(23, 59, 59, 999);
-  
-  
-      where.createdAt = {
-        [Op.gte]: startOfDay,
-        [Op.lte]: endOfDay,
-      };
-  
-      if (status === 'abertas') {
-        where.finished = false;
-      } else if (status === 'fechadas') {
-        where.finished = true;
-      } else if (status === 'ambos') {
-        // Não adiciona filtro 'finished' para 'ambos'
-      }
-  
-      if (type === 'tradicional') {
-        where.type = 'tradicional';
-      } else if (type === 'equipes') {
-        where.type = 'equipes';
-      }
-  
-      return this.getRafflesWithDetails(where);
     }
 
 async getRaffleByIdWithDetails(raffleId: number): Promise<any> {

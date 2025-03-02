@@ -52,14 +52,20 @@ export class RaffleController {
   }
 
   @Get('filtered') // Novo endpoint: /raffles/filtered
-  @ApiOperation({ summary: 'Lista rifas filtradas por tipo (tradicional ou equipes)' })
-  @ApiQuery({ name: 'type', enum: ['tradicional', 'equipes'], description: 'Tipo de rifa a ser filtrada' }) // Documentando o query parameter
-  @ApiResponse({ status: 200, description: 'Retorna as rifas filtradas por tipo.', type: [Raffle] })
+  @ApiOperation({ summary: 'Lista rifas filtradas por tipo, data e status de finalização' }) // Sumário atualizado
+  @ApiQuery({ name: 'type', enum: ['tradicional', 'equipes'], description: 'Tipo de rifa a ser filtrada', required: false })
+  @ApiQuery({ name: 'startDate', type: String, format: 'date-time', description: 'Data de início para filtrar as rifas (ISO 8601)', required: false })
+  @ApiQuery({ name: 'endDate', type: String, format: 'date-time', description: 'Data de fim para filtrar as rifas (ISO 8601)', required: false })
+  @ApiQuery({ name: 'finished', type: Boolean, description: 'Status de finalização da rifa (true para finalizadas, false para abertas)', required: false }) // Novo ApiQuery para finished
+  @ApiResponse({ status: 200, description: 'Retorna as rifas filtradas por tipo, data e/ou status de finalização.', type: [Raffle] }) // Descrição atualizada
   async getFilteredRafflesByType(
-    @Query('type') type: 'tradicional' | 'equipes', // Extrai o query parameter 'type'
+    @Query('type') type?: 'tradicional' | 'equipes',
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('finished') finished?: boolean, // Extraindo finished da query
   ): Promise<any[]> {
-    this.logger.log(`Buscando rifas do tipo: ${type}`);
-    return await this.raffleService.getRafflesWithDetails({ type }); // Passa o filtro 'type' para o service
+    this.logger.log(`Buscando rifas filtradas por tipo: ${type}, data de início: ${startDate}, data de fim: ${endDate}, finalizadas: ${finished}`); // Log atualizado
+    return await this.raffleService.getRafflesWithDetails({ type, startDate, endDate, finished }); // Passando finished para o service
   }
 
   @Get(':raffleId')
@@ -73,33 +79,7 @@ export class RaffleController {
     return await this.raffleService.getRaffleByIdWithDetails(raffleId);
   }
 
-  @Get('day-filtered')
-  @ApiOperation({ summary: 'Lista as rifas do dia com filtros obrigatórios, incluindo status "ambos"' }) // Descrição atualizada
-  @ApiQuery({ name: 'date', type: 'string', format: 'date', description: 'Data para filtrar as rifas (YYYY-MM-DD)' })
-  @ApiQuery({ name: 'status', enum: ['abertas', 'fechadas', 'ambos'], description: 'Filtrar por status da rifa (abertas, fechadas ou ambos)' }) // Enum atualizado
-  @ApiQuery({ name: 'type', enum: ['tradicional', 'equipes'], description: 'Filtrar por tipo de rifa (tradicional ou equipes)' })
-  @ApiResponse({ status: 200, description: 'Retorna as rifas do dia filtradas.', type: [Raffle] })
-  async getRafflesOfTheDayWithFilters(
-    @Query('date', ParseIntPipe) date: Date,
-    @Query('status') status: 'abertas' | 'fechadas' | 'ambos', // Tipo atualizado para incluir 'ambos'
-    @Query('type') type: 'tradicional' | 'equipes',
-  ): Promise<any[]> {
-
-    this.logger.log(`Buscando rifas do dia com filtros: date=${date}, status=${status}, type=${type}`);
-
-    if (!date) {
-        throw new BadRequestException('A data é obrigatória.');
-    }
-    if (!status) {
-        throw new BadRequestException('O status (abertas, fechadas ou ambos) é obrigatório.'); // Mensagem atualizada
-    }
-    if (!type) {
-        throw new BadRequestException('O tipo de rifa (tradicional ou equipes) é obrigatório.');
-    }
-
-    return await this.raffleService.getRafflesOfTheDayWithFilters(date, status, type);
-  }
-
+ 
   @UseGuards(AuthGuard('jwt'))
   @Post(':raffleId/buy-tickets')
   @ApiOperation({ summary: 'Comprar bilhetes específicos para uma rifa' })
