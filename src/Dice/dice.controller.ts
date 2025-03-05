@@ -23,10 +23,10 @@ export class DiceController {
         @Request() req,
         @Body('betNumber', ParseIntPipe) betNumber: number | null,
         @Body('betAmount', ParseIntPipe) betAmount: number,
-        @Body('type') type: 'dupla' | 'tripla'
+        @Body('type') type: 'par_escolhido' | 'tripla_escolhida' | 'soma' | 'aleatorio_dupla' | 'aleatorio_tripla'
     ) {
         const userId = req.user.id;
-       if (betNumber === null && type !== 'dupla') {
+       if (betNumber === null && type !== 'aleatorio_dupla') {
         throw new BadRequestException('Para a jogada tripla você precisa escolher um numero')
        }
         this.logger.log(`Usuário ${userId} tentando comprar bilhetes para a rodada ${roundId}...`);

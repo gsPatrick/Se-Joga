@@ -15,17 +15,17 @@ import { BlockchainHash } from 'src/models/blockchain-hash.model';
 export class DiceService {
     private readonly logger = new Logger(DiceService.name);
 
-  constructor(
-    @InjectModel(DiceRound) private diceRoundModel: typeof DiceRound,
+    constructor(
+        @InjectModel(DiceRound) private diceRoundModel: typeof DiceRound,
         @InjectModel(DiceBet) private diceBetModel: typeof DiceBet,
         @InjectModel(User) private userModel: typeof User,
-          @InjectModel(DiceRoundSeed) private diceRoundSeedModel: typeof DiceRoundSeed,
+        @InjectModel(DiceRoundSeed) private diceRoundSeedModel: typeof DiceRoundSeed,
         private blockchainUtil: BlockchainUtil,
-         @InjectModel(Seed) private seedModel: typeof Seed,
-         @InjectModel(GeneratedNumber)
-           private generatedNumberModel: typeof GeneratedNumber,
+        @InjectModel(Seed) private seedModel: typeof Seed,
+        @InjectModel(GeneratedNumber)
+        private generatedNumberModel: typeof GeneratedNumber,
         private sequelize: Sequelize,
-  ) {}
+    ) { }
 
     async createDiceRound(userId: number): Promise<DiceRound> {
         // 1. Busca o usuário
@@ -93,7 +93,7 @@ private async getNextNumber(roundId:number): Promise<number> {
               ]
             }]
       });
-    
+
     if (!diceRound) {
         throw new NotFoundException('Rodada do dado não encontrada.');
     }
@@ -114,366 +114,475 @@ private async getNextNumber(roundId:number): Promise<number> {
     return finalNumber;
   }
 
-   async buyDiceTickets(
-    userId: number,
-    roundId: number,
-    betData: { betNumber?: number; betAmount: number, type: 'dupla' | 'tripla' },
-    ): Promise<DiceBet[]> {
-       const transaction = await this.sequelize.transaction();
-       try {
-     // 1. Buscar o usuário
-       const user = await this.userModel.findByPk(userId, { transaction });
-       if (!user) {
-          throw new NotFoundException('Usuário não encontrado.');
-         }
+    // Funções auxiliares para cada tipo de aposta
+    private async handleParEscolhidoBet(userId: number, roundId: number, betData: any, transaction: any, createdBets: DiceBet[]): Promise<void> {
+        let firstDiceNumber = 0;
+        let secondDiceNumber = 0;
+        let hasSecondChance = true;
+        while (hasSecondChance) {
+            firstDiceNumber = await this.getNextNumber(roundId);
+            secondDiceNumber = await this.getNextNumber(roundId);
 
-       // 2. Buscar a rodada
-       const diceRound = await this.diceRoundModel.findByPk(roundId, { transaction });
-       if(!diceRound){
-           throw new NotFoundException('Rodada não encontrada.');
-      }
-
-    // 3. Verificar se a rodada já foi finalizada
-        if (diceRound.finished) {
-           throw new BadRequestException('Esta rodada já foi finalizada.');
-        }
-       
-      const createdBets:DiceBet[] = [];
-
-       if (betData.type === 'dupla') {
-        let firstDiceNumber = 0
-         let secondDiceNumber = 0;
-         let hasSecondChance = true;
-         while(hasSecondChance){
-          // 4. Pega o numero gerado
-          firstDiceNumber =  await this.getNextNumber(roundId)
-          secondDiceNumber =  await this.getNextNumber(roundId)
-        
-            const newBet = await this.diceBetModel.create(
-                {
+            const newBet = await this.diceBetModel.create({
                 userId,
                 roundId,
                 betNumber: betData.betNumber,
                 betAmount: betData.betAmount,
-                  generatedNumber: (firstDiceNumber + secondDiceNumber),
-                    win: false, 
-                },
-                { transaction }
-              );
+                type: 'par_escolhido',
+                generatedNumber: (firstDiceNumber + secondDiceNumber), // Mantendo a soma para consistência da coluna
+                win: false,
+            }, { transaction });
             createdBets.push(newBet);
-            
-           if (firstDiceNumber == betData.betNumber || secondDiceNumber == betData.betNumber){
-            this.logger.log(
-                `Usuário ${userId} teve uma chance extra na rodada ${roundId} apostando no número ${betData.betNumber} o número gerado foi: ${firstDiceNumber} e ${secondDiceNumber} `
-           );
-        
-           }else{
-            hasSecondChance = false;
-           }
-         }
 
+            if (firstDiceNumber == betData.betNumber || secondDiceNumber == betData.betNumber) {
+                this.logger.log(
+                    `Usuário ${userId} teve uma chance extra na rodada ${roundId} apostando no número ${betData.betNumber} o número gerado foi: ${firstDiceNumber} e ${secondDiceNumber} `
+                );
+            } else {
+                hasSecondChance = false;
+            }
+        }
+    }
 
-      } else if (betData.type === 'tripla') {
-        let firstDiceNumber = 0
+    private async handleTriplaEscolhidaBet(userId: number, roundId: number, betData: any, transaction: any, createdBets: DiceBet[]): Promise<void> {
+        let firstDiceNumber = 0;
         let secondDiceNumber = 0;
         let thirdDiceNumber = 0;
         let attempts = 3;
         for (let i = 0; i < attempts; i++) {
-            // 4. Pega o numero gerado
-            firstDiceNumber =  await this.getNextNumber(roundId)
-            secondDiceNumber =  await this.getNextNumber(roundId)
-            thirdDiceNumber =  await this.getNextNumber(roundId)
+            firstDiceNumber = await this.getNextNumber(roundId);
+            secondDiceNumber = await this.getNextNumber(roundId);
+            thirdDiceNumber = await this.getNextNumber(roundId);
 
-            const newBet = await this.diceBetModel.create(
-                {
+            const newBet = await this.diceBetModel.create({
                 userId,
                 roundId,
                 betNumber: betData.betNumber,
                 betAmount: betData.betAmount,
-                  generatedNumber: (firstDiceNumber + secondDiceNumber + thirdDiceNumber),
-                    win: false,
-                },
-                { transaction }
-              );
-             createdBets.push(newBet);
-               
-             if ((firstDiceNumber == betData.betNumber && secondDiceNumber == betData.betNumber && thirdDiceNumber == betData.betNumber)) {
+                type: 'tripla_escolhida',
+                generatedNumber: (firstDiceNumber + secondDiceNumber + thirdDiceNumber), // Mantendo a soma para consistência da coluna
+                win: false,
+            }, { transaction });
+            createdBets.push(newBet);
+
+            if ((firstDiceNumber == betData.betNumber && secondDiceNumber == betData.betNumber && thirdDiceNumber == betData.betNumber)) {
                 i = attempts;
+            } else {
+                this.logger.log(`Usuario ${userId} teve mais uma tentativa na rodada ${roundId} para o numero ${betData.betNumber}  os numeros gerados foram ${firstDiceNumber} ${secondDiceNumber} ${thirdDiceNumber}`)
             }
-            else{
-            this.logger.log(`Usuario ${userId} teve mais uma tentativa na rodada ${roundId} para o numero ${betData.betNumber}  os numeros gerados foram ${firstDiceNumber} ${secondDiceNumber} ${thirdDiceNumber}`)
-        }
         }
     }
-       const totalAmount = createdBets.reduce((acc, bet) => acc + betData.betAmount, 0);
 
-     // 5. Atualizar o saldo do usuário
-      await user.update(
-        { balance: user.balance - totalAmount },
-        { transaction },
-      );
-         await transaction.commit();
-    this.logger.log(`Usuário ${userId} apostou ${totalAmount} na rodada de id ${roundId} no modo ${betData.type} e no numero ${betData.betNumber}`);
-       return createdBets;
-         }
-    catch (error) {
-         await transaction.rollback();
-        if (
-        error instanceof NotFoundException ||
-        error instanceof BadRequestException
-         ) {
-           throw error;
-         }
+    private async handleSomaBet(userId: number, roundId: number, betData: any, transaction: any, createdBets: DiceBet[]): Promise<void> {
+        let generatedSum = 0;
+        let diceNumbers: number[] = [];
+        let numberOfDices = 0;
 
-        this.logger.error(
-        `Erro ao comprar bilhetes para a rodada ${roundId} pelo usuário ${userId}: ${(error as any).message}`,
-        (error as any).stack,
-        );
-        throw new InternalServerErrorException(
-        'Erro ao comprar bilhetes. Por favor, tente novamente.',
-         );
-        }
-  }
+        if (betData.type === 'soma') {
+             if (betData.betNumber >= 2 && betData.betNumber <= 12) {
+                diceNumbers = [await this.getNextNumber(roundId), await this.getNextNumber(roundId)];
+                generatedSum = diceNumbers.reduce((acc, num) => acc + num, 0);
+                numberOfDices = 2;
 
-    private checkAndGetPrize(bet: DiceBet): number{
-        if(bet.betNumber == bet.generatedNumber)
-         {
-              return  bet.betAmount;
-         }else{
-                return 0;
-          }
-}
-
-
- async finalizeDiceRound(roundId: number, transactionHost?: any): Promise<DiceRound> {
-    const transaction = transactionHost
-      ? transactionHost
-      : await this.sequelize.transaction();
-    try{
-        // 1. Buscar a rodada
-        const diceRound = await this.diceRoundModel.findByPk(roundId,{
-        include: [{ model: DiceBet,
-              include: [
-                {
-                  model: User,
-                  attributes: ['id', 'name', 'email'],
-                },
-              ],
-           }],
-           transaction
-        });
-
-        if (!diceRound) {
-        throw new NotFoundException('Rodada não encontrada.');
-        }
-
-      // 2. Verificar se a rodada já foi finalizada
-      if (diceRound.finished) {
-        throw new ConflictException('Rodada já finalizada.');
-      }
-        const bets = diceRound.bets;
-
-          for (const bet of bets) {
-              const prize = this.checkAndGetPrize(bet)
-            if(prize > 0)
-           {
-               bet.win = true;
-               const winnerUser = await this.userModel.findByPk(bet.userId, {
-                    attributes: ['id', 'name', 'email'],
-                    transaction
-                  });
-                if (!winnerUser) {
-                  throw new NotFoundException('Usuário vencedor não encontrado.');
-                }
-                await winnerUser.update(
-                  { balance: winnerUser.balance + prize },
-                  { transaction },
-                );
-                this.logger.log(
-                  `Usuário ${winnerUser.id} ganhou na rodada ${diceRound.id} e recebeu ${prize} pelo número ${bet.betNumber} o número gerado foi: ${bet.generatedNumber}`
-                );
-           }else{
-                bet.win = false
+            } else if (betData.betNumber >= 3 && betData.betNumber <= 18) {
+                diceNumbers = [await this.getNextNumber(roundId), await this.getNextNumber(roundId), await this.getNextNumber(roundId)];
+                generatedSum = diceNumbers.reduce((acc, num) => acc + num, 0);
+                 numberOfDices = 3;
+            } else {
+                throw new BadRequestException('Número de soma inválido para o tipo de aposta.');
             }
-            await bet.save({ transaction });
-          }
-       diceRound.finished = true;
-        await diceRound.save({transaction});
 
-      if (!transactionHost) await transaction.commit();
+        }
 
-      this.logger.log(`Rodada de dado ${roundId} finalizada.`);
-    return diceRound;
+
+        const newBet = await this.diceBetModel.create({
+            userId,
+            roundId,
+            betNumber: betData.betNumber,
+            betAmount: betData.betAmount,
+            type: 'soma',
+            generatedNumber: generatedSum,
+            win: false,
+        }, { transaction });
+        createdBets.push(newBet);
+         this.logger.log(`Usuario ${userId} apostou na rodada ${roundId} no modo soma com ${numberOfDices} dados, numero apostado: ${betData.betNumber} e numero gerado: ${generatedSum}`)
+    }
+
+    private async handleAleatorioDuplaBet(userId: number, roundId: number, betData: any, transaction: any, createdBets: DiceBet[]): Promise<void> {
+        let firstDiceNumber = 0;
+        let secondDiceNumber = 0;
+
+        firstDiceNumber = await this.getNextNumber(roundId);
+        secondDiceNumber = await this.getNextNumber(roundId);
+
+        const newBet = await this.diceBetModel.create({
+            userId,
+            roundId,
+            betNumber: null, // Não precisa de betNumber para aleatório
+            betAmount: betData.betAmount,
+            type: 'aleatorio_dupla',
+            generatedNumber: (firstDiceNumber * 10 + secondDiceNumber), // Combinacao para registrar os dois numeros
+            win: false,
+        }, { transaction });
+        createdBets.push(newBet);
+         this.logger.log(`Usuario ${userId} apostou na rodada ${roundId} no modo aleatorio dupla, numeros gerados: ${firstDiceNumber} e ${secondDiceNumber}`)
+    }
+
+    private async handleAleatorioTriplaBet(userId: number, roundId: number, betData: any, transaction: any, createdBets: DiceBet[]): Promise<void> {
+        let firstDiceNumber = 0;
+        let secondDiceNumber = 0;
+        let thirdDiceNumber = 0;
+
+        firstDiceNumber = await this.getNextNumber(roundId);
+        secondDiceNumber = await this.getNextNumber(roundId);
+        thirdDiceNumber = await this.getNextNumber(roundId);
+
+        const newBet = await this.diceBetModel.create({
+            userId,
+            roundId,
+            betNumber: null, // Não precisa de betNumber para aleatório
+            betAmount: betData.betAmount,
+            type: 'aleatorio_tripla',
+            generatedNumber: (firstDiceNumber * 100 + secondDiceNumber * 10 + thirdDiceNumber), // Combinacao para registrar os tres numeros
+            win: false,
+        }, { transaction });
+        createdBets.push(newBet);
+        this.logger.log(`Usuario ${userId} apostou na rodada ${roundId} no modo aleatorio tripla, numeros gerados: ${firstDiceNumber}, ${secondDiceNumber} e ${thirdDiceNumber}`)
+    }
+
+
+    async buyDiceTickets(
+        userId: number,
+        roundId: number,
+        betData: { betNumber?: number; betAmount: number, type: 'par_escolhido' | 'tripla_escolhida' | 'soma' | 'aleatorio_dupla' | 'aleatorio_tripla' }, // Tipos de aposta atualizados
+    ): Promise<DiceBet[]> {
+        const transaction = await this.sequelize.transaction();
+        try {
+            // 1. Buscar o usuário
+            const user = await this.userModel.findByPk(userId, { transaction });
+            if (!user) {
+                throw new NotFoundException('Usuário não encontrado.');
+            }
+
+            // 2. Buscar a rodada
+            const diceRound = await this.diceRoundModel.findByPk(roundId, { transaction });
+            if (!diceRound) {
+                throw new NotFoundException('Rodada não encontrada.');
+            }
+
+            // 3. Verificar se a rodada já foi finalizada
+            if (diceRound.finished) {
+                throw new BadRequestException('Esta rodada já foi finalizada.');
+            }
+
+            const createdBets: DiceBet[] = [];
+
+            // Mapeamento de tipos de aposta para funções auxiliares
+            const betTypeHandlers: { [key: string]: (userId: number, roundId: number, betData: any, transaction: any, createdBets: DiceBet[]) => Promise<void> } = {
+                'par_escolhido': this.handleParEscolhidoBet.bind(this),
+                'tripla_escolhida': this.handleTriplaEscolhidaBet.bind(this),
+                'soma': this.handleSomaBet.bind(this),
+                'aleatorio_dupla': this.handleAleatorioDuplaBet.bind(this),
+                'aleatorio_tripla': this.handleAleatorioTriplaBet.bind(this),
+            };
+
+            const handler = betTypeHandlers[betData.type];
+            if (handler) {
+                await handler(userId, roundId, betData, transaction, createdBets);
+            } else {
+                throw new BadRequestException(`Tipo de aposta inválido: ${betData.type}`);
+            }
+
+
+            const totalAmount = createdBets.reduce((acc, bet) => acc + betData.betAmount, 0);
+
+            // 5. Atualizar o saldo do usuário
+            await user.update(
+                { balance: user.balance - totalAmount },
+                { transaction },
+            );
+            await transaction.commit();
+            this.logger.log(`Usuário ${userId} apostou ${totalAmount} na rodada de id ${roundId} no modo ${betData.type} e no numero ${betData.betNumber}`);
+            return createdBets;
         }
         catch (error) {
-             if (!transactionHost) await transaction.rollback();
-
+            await transaction.rollback();
             if (
-              error instanceof NotFoundException ||
-              error instanceof BadRequestException ||
-              error instanceof ConflictException
+                error instanceof NotFoundException ||
+                error instanceof BadRequestException
             ) {
-              throw error;
+                throw error;
             }
 
-      this.logger.error(
-        `Erro ao finalizar a rodada ${roundId}: ${(error as any).message}`,
-        (error as any).stack,
-      );
-      throw new InternalServerErrorException(
-        'Erro ao finalizar a rodada. Por favor, tente novamente.',
-      );
+            this.logger.error(
+                `Erro ao comprar bilhetes para a rodada ${roundId} pelo usuário ${userId}: ${(error as any).message}`,
+                (error as any).stack,
+            );
+            throw new InternalServerErrorException(
+                'Erro ao comprar bilhetes. Por favor, tente novamente.',
+            );
+        }
+    }
+
+    private checkAndGetPrize(bet: DiceBet): number {
+        if (bet.type === 'par_escolhido' || bet.type === 'tripla_escolhida' || bet.type === 'soma') { // Tipos que já tinham lógica de premio igual
+            if (bet.betNumber == bet.generatedNumber) {
+                return bet.betAmount;
+            } else {
+                return 0;
+            }
+        } else if (bet.type === 'aleatorio_dupla') {
+            const firstDice = Math.floor(bet.generatedNumber / 10);
+            const secondDice = bet.generatedNumber % 10;
+            if (firstDice === secondDice) {
+                return bet.betAmount; // Define o premio para 'aleatorio_dupla' (ex: 1x a aposta)
+            } else {
+                return 0;
+            }
+        } else if (bet.type === 'aleatorio_tripla') {
+            const firstDice = Math.floor(bet.generatedNumber / 100);
+            const secondDice = Math.floor((bet.generatedNumber % 100) / 10);
+            const thirdDice = bet.generatedNumber % 10;
+            if (firstDice === secondDice && secondDice === thirdDice) {
+                return bet.betAmount; // Define o premio para 'aleatorio_tripla' (ex: 1x a aposta)
+            } else {
+                return 0;
+            }
+        }
+        return 0; // Default caso o tipo não seja reconhecido ou não ganhe
+    }
+
+
+    async finalizeDiceRound(roundId: number, transactionHost?: any): Promise<DiceRound> {
+        const transaction = transactionHost
+            ? transactionHost
+            : await this.sequelize.transaction();
+        try {
+            // 1. Buscar a rodada
+            const diceRound = await this.diceRoundModel.findByPk(roundId, {
+                include: [{
+                    model: DiceBet,
+                    include: [
+                        {
+                            model: User,
+                            attributes: ['id', 'name', 'email'],
+                        },
+                    ],
+                }],
+                transaction
+            });
+
+            if (!diceRound) {
+                throw new NotFoundException('Rodada não encontrada.');
+            }
+
+            // 2. Verificar se a rodada já foi finalizada
+            if (diceRound.finished) {
+                throw new ConflictException('Rodada já finalizada.');
+            }
+            const bets = diceRound.bets;
+
+            for (const bet of bets) {
+                const prize = this.checkAndGetPrize(bet)
+                if (prize > 0) {
+                    bet.win = true;
+                    const winnerUser = await this.userModel.findByPk(bet.userId, {
+                        attributes: ['id', 'name', 'email'],
+                        transaction
+                    });
+                    if (!winnerUser) {
+                        throw new NotFoundException('Usuário vencedor não encontrado.');
+                    }
+                    await winnerUser.update(
+                        { balance: winnerUser.balance + prize },
+                        { transaction },
+                    );
+                    this.logger.log(
+                        `Usuário ${winnerUser.id} ganhou na rodada ${diceRound.id} e recebeu ${prize} pelo número ${bet.betNumber} o número gerado foi: ${bet.generatedNumber}`
+                    );
+                } else {
+                    bet.win = false
+                }
+                await bet.save({ transaction });
+            }
+            diceRound.finished = true;
+            await diceRound.save({ transaction });
+
+            if (!transactionHost) await transaction.commit();
+
+            this.logger.log(`Rodada de dado ${roundId} finalizada.`);
+            return diceRound;
+        }
+        catch (error) {
+            if (!transactionHost) await transaction.rollback();
+
+            if (
+                error instanceof NotFoundException ||
+                error instanceof BadRequestException ||
+                error instanceof ConflictException
+            ) {
+                throw error;
+            }
+
+            this.logger.error(
+                `Erro ao finalizar a rodada ${roundId}: ${(error as any).message}`,
+                (error as any).stack,
+            );
+            throw new InternalServerErrorException(
+                'Erro ao finalizar a rodada. Por favor, tente novamente.',
+            );
         }
     }
     //   Consulta
     async getDiceRoundsWithDetails(): Promise<any[]> {
-      const rounds = await this.diceRoundModel.findAll({
-          include: [
-              {
-                  model: User,
-                  as: 'createdByUser',
-                  attributes: ['id', 'name', 'email'],
-              },
-              {
-                  model: DiceBet,
-                   include: [{
-                        model: User,
-                        attributes: ['id', 'name', 'email'],
-                    }],
-                 },
+        const rounds = await this.diceRoundModel.findAll({
+            include: [
                 {
-                   model: DiceRoundSeed,
-                       include: [
-                         {
-                          model: Seed,
-                          include:[{
-                            model: BlockchainHash
-                             }]
-                      }
-                   ]
-                 }
-          ],
-           order: [['createdAt', 'DESC']],
-      })
-      return rounds.map(round => ({
-        id: round.id,
-         createdAt: round.createdAt,
-          finished: round.finished,
-          createdBy: {
-            id: round.createdByUser?.id,
-              name: round.createdByUser?.name,
-            email: round.createdByUser?.email
-          },
-         hash: round.diceRoundSeed[0].seed.blockchainHash.hash,
-         bets: round.bets.map(bet => ({
-            id: bet.id,
-             userId: bet.userId,
-            betNumber: bet.betNumber,
-            betAmount: bet.betAmount,
-            generatedNumber: bet.generatedNumber,
-             createdAt: bet.createdAt,
-              win: bet.win,
-              user: {
-                id: bet.user?.id,
-                  name: bet.user?.name,
-                   email: bet.user?.email
-                 }
-            })),
-     }));
-  }
-  
-    async getDiceRoundByIdWithDetails(roundId: number): Promise<any> {
-        const round = await this.diceRoundModel.findByPk(roundId, {
-          include: [
-              {
-                  model: User,
-                  as: 'createdByUser',
-                  attributes: ['id', 'name', 'email'],
-              },
-              {
-                  model: DiceBet,
+                    model: User,
+                    as: 'createdByUser',
+                    attributes: ['id', 'name', 'email'],
+                },
+                {
+                    model: DiceBet,
                     include: [{
                         model: User,
                         attributes: ['id', 'name', 'email'],
                     }],
-             },
-              {
-                model: DiceRoundSeed,
-                include: [
-                    {
-                    model: Seed,
-                        include:[{
-                         model: BlockchainHash
-                           }]
-                     }
-                 ]
-            }
-        ],
-      });
-  
-      if (!round) {
-        throw new NotFoundException('Rodada não encontrada.');
-      }
+                },
+                {
+                    model: DiceRoundSeed,
+                    include: [
+                        {
+                            model: Seed,
+                            include: [{
+                                model: BlockchainHash
+                            }]
+                        }
+                    ]
+                }
+            ],
+            order: [['createdAt', 'DESC']],
+        })
+        return rounds.map(round => ({
+            id: round.id,
+            createdAt: round.createdAt,
+            finished: round.finished,
+            createdBy: {
+                id: round.createdByUser?.id,
+                name: round.createdByUser?.name,
+                email: round.createdByUser?.email
+            },
+            hash: round.diceRoundSeed[0].seed.blockchainHash.hash,
+            bets: round.bets.map(bet => ({
+                id: bet.id,
+                userId: bet.userId,
+                betNumber: bet.betNumber,
+                betAmount: bet.betAmount,
+                generatedNumber: bet.generatedNumber,
+                createdAt: bet.createdAt,
+                win: bet.win,
+                type: bet.type, // Adicionando o tipo da aposta
+                user: {
+                    id: bet.user?.id,
+                    name: bet.user?.name,
+                    email: bet.user?.email
+                }
+            })),
+        }));
+    }
+
+    async getDiceRoundByIdWithDetails(roundId: number): Promise<any> {
+        const round = await this.diceRoundModel.findByPk(roundId, {
+            include: [
+                {
+                    model: User,
+                    as: 'createdByUser',
+                    attributes: ['id', 'name', 'email'],
+                },
+                {
+                    model: DiceBet,
+                    include: [{
+                        model: User,
+                        attributes: ['id', 'name', 'email'],
+                    }],
+                },
+                {
+                    model: DiceRoundSeed,
+                    include: [
+                        {
+                            model: Seed,
+                            include: [{
+                                model: BlockchainHash
+                            }]
+                        }
+                    ]
+                }
+            ],
+        });
+
+        if (!round) {
+            throw new NotFoundException('Rodada não encontrada.');
+        }
         return {
             id: round.id,
-             createdAt: round.createdAt,
+            createdAt: round.createdAt,
             finished: round.finished,
             createdBy: {
                 id: round.createdByUser?.id,
                 name: round.createdByUser?.name,
                 email: round.createdByUser?.email,
             },
-             hash: round.diceRoundSeed[0].seed.blockchainHash.hash,
+            hash: round.diceRoundSeed[0].seed.blockchainHash.hash,
             bets: round.bets.map(bet => ({
                 id: bet.id,
-                 userId: bet.userId,
+                userId: bet.userId,
                 betNumber: bet.betNumber,
                 betAmount: bet.betAmount,
-                  generatedNumber: bet.generatedNumber,
+                generatedNumber: bet.generatedNumber,
                 createdAt: bet.createdAt,
                 win: bet.win,
+                type: bet.type, // Adicionando o tipo da aposta
                 user: {
-                   id: bet.user?.id,
+                    id: bet.user?.id,
                     name: bet.user?.name,
                     email: bet.user?.email,
-                   }
-             })),
-       };
-    }
-    
-   async getDiceRoundsPlayedByUser(userId: number): Promise<DiceRound[]> {
-          return this.diceRoundModel.findAll({
-            include: [
-              {
-                model: DiceBet,
-                where: { userId: userId },
-                required: true,
-                  include: [
-                    {
-                    model: User,
-                    attributes: ['id', 'name', 'email'],
-                    },
-                ],
-              },
-              {
-                model: User,
-                as: 'createdByUser',
-                attributes: ['id', 'name', 'email'],
-              },
-              {
-               model: DiceRoundSeed,
-                   include: [
-                       {
-                        model: Seed,
-                             include:[{
-                             model: BlockchainHash
-                               }]
-                        }
-                    ]
-               }
-            ],
-            order: [['createdAt', 'DESC']],
-          });
+                }
+            })),
+        };
     }
 
+    async getDiceRoundsPlayedByUser(userId: number): Promise<DiceRound[]> {
+        return this.diceRoundModel.findAll({
+            include: [
+                {
+                    model: DiceBet,
+                    where: { userId: userId },
+                    required: true,
+                    include: [
+                        {
+                            model: User,
+                            attributes: ['id', 'name', 'email'],
+                        },
+                    ],
+                },
+                {
+                    model: User,
+                    as: 'createdByUser',
+                    attributes: ['id', 'name', 'email'],
+                },
+                {
+                    model: DiceRoundSeed,
+                    include: [
+                        {
+                            model: Seed,
+                            include: [{
+                                model: BlockchainHash
+                            }]
+                        }
+                    ]
+                }
+            ],
+            order: [['createdAt', 'DESC']],
+        });
+    }
 }
