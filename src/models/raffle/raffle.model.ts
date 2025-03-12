@@ -34,6 +34,7 @@ export class Raffle extends Model {
   })
   raffleIdentifier!: string;
 
+
 // raffle.model.ts
 
   @BelongsTo(() => User)
@@ -101,6 +102,8 @@ export class Raffle extends Model {
     allowNull: true,
   })
   winningTicket!: string;
+
+  
 
   // Adicione a propriedade winnerUserId aqui:
   @ForeignKey(() => User)

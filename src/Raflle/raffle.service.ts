@@ -15,57 +15,364 @@ import { Op } from 'sequelize';
 export class RaffleService {
   private readonly logger = new Logger(RaffleService.name);
 
-    public readonly teamNames = [
-        'Brasil', 'Alemanha', 'Itália', 'Argentina', 'França',
-        'Espanha', 'Inglaterra', 'Uruguai', 'Holanda', 'Portugal',
-        'Bélgica', 'Croácia', 'México', 'Colômbia', 'Chile',
-        'Paraguai', 'Estados Unidos', 'Rússia', 'Suécia', 'Dinamarca',
-        'Servia', 'Japão', 'Coreia do Sul', 'Camarões', 'Nigéria'
-      ];
+  public readonly teamNames = [
+    'Brasil', 'Alemanha', 'Itália', 'Argentina', 'França',
+    'Espanha', 'Inglaterra', 'Uruguai', 'Holanda', 'Portugal',
+    'Bélgica', 'Croácia', 'México', 'Colômbia', 'Chile',
+    'Paraguai', 'Estados Unidos', 'Rússia', 'Suécia', 'Dinamarca',
+    'Servia', 'Japão', 'Coreia do Sul', 'Camarões', 'Nigéria'
+  ];
 
-  constructor(
-    @InjectModel(Raffle) private raffleModel: typeof Raffle,
-    @InjectModel(BlockchainHash)
-    private blockchainHashModel: typeof BlockchainHash,
-    @InjectModel(GeneratedNumber)
-    private generatedNumberModel: typeof GeneratedNumber,
-    @InjectModel(RaffleNumber)
-    private raffleNumberModel: typeof RaffleNumber,
-    @InjectModel(Seed) private seedModel: typeof Seed,
-    @InjectModel(User) private userModel: typeof User,
-    @InjectModel(RaffleTicket) private raffleTicketModel: typeof RaffleTicket,
-    private sequelize: Sequelize,
-  ) {}
+public readonly fixedRafflePrices = [5, 10, 20, 30, 50, 100];
 
-  
 
-  async createSystemRaffle(endDate?: Date): Promise<Raffle> {
+constructor(
+@InjectModel(Raffle) private raffleModel: typeof Raffle,
+@InjectModel(BlockchainHash)
+private blockchainHashModel: typeof BlockchainHash,
+@InjectModel(GeneratedNumber)
+private generatedNumberModel: typeof GeneratedNumber,
+@InjectModel(RaffleNumber)
+private raffleNumberModel: typeof RaffleNumber,
+@InjectModel(Seed) private seedModel: typeof Seed,
+@InjectModel(User) private userModel: typeof User,
+@InjectModel(RaffleTicket) private raffleTicketModel: typeof RaffleTicket,
+private sequelize: Sequelize,
+) {}
+
+
+  async initializeFixedRaffles() {
+    this.logger.log('Inicializando rifas fixas...');
+    for (const price of this.fixedRafflePrices) {
+        try {
+            await this.createSystemRaffle(price);
+            this.logger.log(`Rifa tradicional de R$ ${price.toFixed(2)} inicializada.`);
+        } catch (error) {
+            this.logger.error(`Erro ao inicializar rifa tradicional de R$ ${price.toFixed(2)}: ${(error as any).message}`);
+        }
+        try {
+            await this.createTeamRaffle(price);
+            this.logger.log(`Rifa de equipes de R$ ${price.toFixed(2)} inicializada.`);
+        } catch (error) {
+            this.logger.error(`Erro ao inicializar rifa de equipes de R$ ${price.toFixed(2)}: ${(error as any).message}`);
+        }
+    }
+    this.logger.log('Inicialização de rifas fixas concluída.');
+}
+
+
+async getActiveFixedRaffles(): Promise<any> {
+  this.logger.log('Buscando rifas fixas ativas...');
+  const activeFixedRaffles = {};
+
+  for (const price of this.fixedRafflePrices) {
+      this.logger.log(`Buscando rifas tradicionais ativas para o preço: ${price}`);
+      const traditionalRaffles = await this.raffleModel.findAll({
+          where: {
+              ticketPrice: price,
+              type: 'tradicional',
+              finished: false,
+          },
+          include: [ // **ADICIONANDO INCLUDE - COPIADO DE getRafflesWithDetails**
+              {
+                  model: RaffleTicket,
+                  as: 'tickets',
+                  include: [
+                      {
+                          model: User,
+                          attributes: ['id', 'name', 'email'],
+                      },
+                  ],
+              },
+              {
+                  model: User,
+                  as: 'winnerUser',
+                  attributes: ['id', 'name', 'email'],
+              },
+              {
+                  model: RaffleNumber,
+                  include: [
+                      {
+                          model: GeneratedNumber,
+                          include: [
+                              {
+                                  model: Seed,
+                                  include: [
+                                      {
+                                          model: BlockchainHash,
+                                      },
+                                  ],
+                              },
+                          ],
+                      },
+                  ],
+              },
+          ],
+          order: [['createdAt', 'DESC']],
+          limit: 6,
+      });
+      this.logger.log(`Rifas tradicionais encontradas para o preço ${price}:`, traditionalRaffles);
+
+      const teamRaffles = await this.raffleModel.findAll({
+          where: {
+              ticketPrice: price,
+              type: 'equipes',
+              finished: false,
+          },
+          include: [ // **ADICIONANDO INCLUDE - COPIADO DE getRafflesWithDetails**
+              {
+                  model: RaffleTicket,
+                  as: 'tickets',
+                  include: [
+                      {
+                          model: User,
+                          attributes: ['id', 'name', 'email'],
+                      },
+                  ],
+              },
+              {
+                  model: User,
+                  as: 'winnerUser',
+                  attributes: ['id', 'name', 'email'],
+              },
+              {
+                  model: RaffleNumber,
+                  include: [
+                      {
+                          model: GeneratedNumber,
+                          include: [
+                              {
+                                  model: Seed,
+                                  include: [
+                                      {
+                                          model: BlockchainHash,
+                                      },
+                                  ],
+                              },
+                          ],
+                      },
+                  ],
+              },
+          ],
+          order: [['createdAt', 'DESC']],
+          limit: 6,
+      });
+      this.logger.log(`Rifas de equipes encontradas para o preço ${price}:`, teamRaffles);
+
+      activeFixedRaffles[price] = {
+          tradicional: traditionalRaffles.map(raffle => ({ // **MAP IDÊNTICO AO getRafflesWithDetails**
+              id: raffle.id,
+              raffleIdentifier: raffle.raffleIdentifier,
+              type: raffle.type,
+              winner: raffle.winnerUser ? { id: raffle.winnerUser.id, name: raffle.winnerUser.name, email: raffle.winnerUser.email } : null,
+              winningTeam: null, // winningTeam não é usado aqui
+              title: raffle.title,
+              description: raffle.description,
+              ticketPrice: String(raffle.ticketPrice), // **CONVERSÃO PARA STRING**
+              totalTickets: raffle.totalTickets,
+              soldTickets: raffle.soldTickets,
+              startDate: raffle.startDate,
+              endDate: raffle.endDate,
+              drawDate: raffle.drawDate,
+              finished: raffle.finished,
+              winningTicket: raffle.winningTicket,
+              createdAt: raffle.createdAt,
+              updatedAt: raffle.updatedAt,
+          })),
+          equipes: teamRaffles.map(raffle => ({ // **MAP IDÊNTICO AO getRafflesWithDetails**
+              id: raffle.id,
+              raffleIdentifier: raffle.raffleIdentifier,
+              type: raffle.type,
+              winner: raffle.winnerUser ? { id: raffle.winnerUser.id, name: raffle.winnerUser.name, email: raffle.winnerUser.email } : null,
+              winningTeam: null, // winningTeam não é usado aqui
+              title: raffle.title,
+              description: raffle.description,
+              ticketPrice: String(raffle.ticketPrice), // **CONVERSÃO PARA STRING**
+              totalTickets: raffle.totalTickets,
+              soldTickets: raffle.soldTickets,
+              startDate: raffle.startDate,
+              endDate: raffle.endDate,
+              drawDate: raffle.drawDate,
+              finished: raffle.finished,
+              winningTicket: raffle.winningTicket,
+              createdAt: raffle.createdAt,
+              updatedAt: raffle.updatedAt,
+          })),
+      };
+  }
+
+  return activeFixedRaffles;
+}
+
+async getAllFixedAndExtraRaffles(): Promise<any> {
+  this.logger.log('Buscando todas as rifas fixas e extras...');
+  const allFixedRaffles = {
+      tradicional: {},
+      equipes: {}
+  };
+
+  for (const price of this.fixedRafflePrices) {
+      this.logger.log(`Buscando rifas tradicionais para o preço: ${price}`);
+      const traditionalRaffles = await this.raffleModel.findAll({
+          where: {
+              ticketPrice: price,
+              type: 'tradicional',
+          },
+          include: [ // **ADICIONANDO INCLUDE - COPIADO DE getRafflesWithDetails**
+              {
+                  model: RaffleTicket,
+                  as: 'tickets',
+                  include: [
+                      {
+                          model: User,
+                          attributes: ['id', 'name', 'email'],
+                      },
+                  ],
+              },
+              {
+                  model: User,
+                  as: 'winnerUser',
+                  attributes: ['id', 'name', 'email'],
+              },
+              {
+                  model: RaffleNumber,
+                  include: [
+                      {
+                          model: GeneratedNumber,
+                          include: [
+                              {
+                                  model: Seed,
+                                  include: [
+                                      {
+                                          model: BlockchainHash,
+                                      },
+                                  ],
+                              },
+                          ],
+                      },
+                  ],
+              },
+          ],
+          order: [['createdAt', 'DESC']],
+      });
+      this.logger.log(`Rifas tradicionais encontradas para o preço ${price}:`, traditionalRaffles);
+
+      const teamRaffles = await this.raffleModel.findAll({
+          where: {
+              ticketPrice: price,
+              type: 'equipes',
+          },
+          include: [ // **ADICIONANDO INCLUDE - COPIADO DE getRafflesWithDetails**
+              {
+                  model: RaffleTicket,
+                  as: 'tickets',
+                  include: [
+                      {
+                          model: User,
+                          attributes: ['id', 'name', 'email'],
+                      },
+                  ],
+              },
+              {
+                  model: User,
+                  as: 'winnerUser',
+                  attributes: ['id', 'name', 'email'],
+              },
+              {
+                  model: RaffleNumber,
+                  include: [
+                      {
+                          model: GeneratedNumber,
+                          include: [
+                              {
+                                  model: Seed,
+                                  include: [
+                                      {
+                                          model: BlockchainHash,
+                                      },
+                                  ],
+                              },
+                          ],
+                      },
+                  ],
+              },
+          ],
+          order: [['createdAt', 'DESC']],
+      });
+      this.logger.log(`Rifas de equipes encontradas para o preço ${price}:`, teamRaffles);
+
+      allFixedRaffles.tradicional[price] = traditionalRaffles.map(raffle => ({ // **MAP IDÊNTICO AO getRafflesWithDetails**
+          id: raffle.id,
+          raffleIdentifier: raffle.raffleIdentifier,
+          type: raffle.type,
+          winner: raffle.winnerUser ? { id: raffle.winnerUser.id, name: raffle.winnerUser.name, email: raffle.winnerUser.email } : null,
+          winningTeam: null, // winningTeam não é usado aqui
+          title: raffle.title,
+          description: raffle.description,
+          ticketPrice: String(raffle.ticketPrice), // **CONVERSÃO PARA STRING**
+          totalTickets: raffle.totalTickets,
+          soldTickets: raffle.soldTickets,
+          startDate: raffle.startDate,
+          endDate: raffle.endDate,
+          drawDate: raffle.drawDate,
+          finished: raffle.finished,
+          winningTicket: raffle.winningTicket,
+          createdAt: raffle.createdAt,
+          updatedAt: raffle.updatedAt,
+      }));
+      allFixedRaffles.equipes[price] = teamRaffles.map(raffle => ({  // **MAP IDÊNTICO AO getRafflesWithDetails**
+          id: raffle.id,
+          raffleIdentifier: raffle.raffleIdentifier,
+          type: raffle.type,
+          winner: raffle.winnerUser ? { id: raffle.winnerUser.id, name: raffle.winnerUser.name, email: raffle.winnerUser.email } : null,
+          winningTeam: null, // winningTeam não é usado aqui
+          title: raffle.title,
+          description: raffle.description,
+          ticketPrice: String(raffle.ticketPrice), // **CONVERSÃO PARA STRING**
+          totalTickets: raffle.totalTickets,
+          soldTickets: raffle.soldTickets,
+          startDate: raffle.startDate,
+          endDate: raffle.endDate,
+          drawDate: raffle.drawDate,
+          finished: raffle.finished,
+          winningTicket: raffle.winningTicket,
+          createdAt: raffle.createdAt,
+          updatedAt: raffle.updatedAt,
+      }));
+  }
+
+  return allFixedRaffles;
+}
+
+  async createSystemRaffle(ticketPrice: number): Promise<Raffle> {
+    this.logger.log(`Criando rifa do sistema com preço: ${ticketPrice}...`);
+
     // 1. Encontrar a hash mais recente
     const latestHash = await this.blockchainHashModel.findOne({
-      order: [['timestamp', 'DESC']],
+        order: [['timestamp', 'DESC']],
     });
 
     if (!latestHash) {
-      throw new NotFoundException('Nenhuma hash de blockchain encontrada.');
+        throw new NotFoundException('Nenhuma hash de blockchain encontrada.');
     }
 
     // 2. Encontrar a seed correspondente à hash mais recente
     const correspondingSeed = await this.seedModel.findOne({
-      where: { hashId: latestHash.id },
-      include: [
-        {
-          model: GeneratedNumber,
-          order: [['createdAt', 'DESC']],
-          limit: 1,
-        },
-      ],
-      order: [['createdAt', 'DESC']],
+        where: { hashId: latestHash.id },
+        include: [
+            {
+                model: GeneratedNumber,
+                order: [['createdAt', 'DESC']],
+                limit: 1,
+            },
+        ],
+        order: [['createdAt', 'DESC']],
     });
 
     if (!correspondingSeed || correspondingSeed.generatedNumbers.length === 0) {
-      throw new NotFoundException(
-        'Nenhuma seed ou generatedNumber correspondente encontrado para a hash mais recente.',
-      );
+        throw new NotFoundException(
+            'Nenhuma seed ou generatedNumber correspondente encontrado para a hash mais recente.',
+        );
     }
 
     // 3. Obter o generatedNumber mais recente da seed
@@ -79,69 +386,65 @@ export class RaffleService {
 
     // 5. Criar a rifa
     const newRaffle = await this.raffleModel.create({
-      raffleIdentifier: `RIFA-${Date.now()}`,
-      createdBy: null,
-      title: 'Rifa Automática',
-      description: `Rifa gerada automaticamente com base na hash ${latestHash.hash}`,
-      ticketPrice: 10.0,
-      totalTickets: 100,
-      soldTickets: 0,
-      startDate: startDate, // Usar a variável startDate
-      endDate: endDate || null,
-      finished: false,
-      winningTicket: lastTwoDigits.toString().padStart(2, '0'),
+        raffleIdentifier: `RIFA-${Date.now()}`,
+        createdBy: null,
+        title: `Rifa Automática - R$ ${ticketPrice.toFixed(2)}`,
+        description: `Rifa gerada automaticamente com base na hash ${latestHash.hash} - R$ ${ticketPrice.toFixed(2)}`,
+        ticketPrice: ticketPrice,
+        totalTickets: 100,
+        soldTickets: 0,
+        startDate: startDate, // Usar a variável startDate
+        endDate: null, // Removendo endDate fixo por enquanto
+        finished: false,
+        winningTicket: lastTwoDigits.toString().padStart(2, '0'),
     }, {
-      transaction: null, // Certifique-se de que a transação seja nula
+        transaction: null, // Certifique-se de que a transação seja nula
     });
 
     // 6. Criar o RaffleNumber associado
     await this.raffleNumberModel.create({
-      raffleId: newRaffle.id,
-      numberId: latestGeneratedNumber.id,
+        raffleId: newRaffle.id,
+        numberId: latestGeneratedNumber.id,
     }, {
-      transaction: null, // Certifique-se de que a transação seja nula
+        transaction: null, // Certifique-se de que a transação seja nula
     });
 
     this.logger.log(
-      `Rifa criada com sucesso: ${newRaffle.raffleIdentifier}, winningTicket(temp): ${lastTwoDigits
-        .toString()
-        .padStart(2, '0')}, generatedNumberId: ${latestGeneratedNumber.id}`,
+        `Rifa criada com sucesso: ${newRaffle.raffleIdentifier}, winningTicket(temp): ${lastTwoDigits
+            .toString()
+            .padStart(2, '0')}, generatedNumberId: ${latestGeneratedNumber.id}, Preço: R$ ${ticketPrice.toFixed(2)}`,
     );
 
     return newRaffle;
-  }
-
+}
   // Cron job para criar rifas a cada 2 horas
-  @Cron('0 0 */2 * * *')
-  async createRafflesCronJob() {
-    this.logger.log('Iniciando cron job para criar rifas...');
+    // Cron job para criar rifas a cada 2 horas - REMOVIDO/SIMPLIFICADO
+    //@Cron('0 0 */2 * * *')
+    async createRafflesCronJob() {
+      this.logger.log('Iniciando cron job para criar rifas fixas e extras tradicionais...');
+      for (const price of this.fixedRafflePrices) {
+          // Verifica se existe alguma rifa tradicional ativa para este preço
+          const activeRaffles = await this.raffleModel.findAll({
+              where: {
+                  ticketPrice: price,
+                  type: 'tradicional',
+                  finished: false,
+              },
+          });
 
-    for (let i = 0; i < 7; i++) {
-      try {
-        const newRaffle = await this.createSystemRaffle();
-        this.logger.log(`Rifa criada pelo cron job com id: ${newRaffle.id}`);
-
-        // Define a data de finalização para 2 horas após a criação da rifa
-        const endDate = new Date(
-          newRaffle.createdAt.getTime() + 2 * 60 * 60 * 1000,
-        );
-
-        // Atualiza a rifa com a nova data de finalização
-        await this.raffleModel.update(
-          { endDate: endDate },
-          { where: { id: newRaffle.id } },
-        );
-        this.logger.log(
-          `Rifa ${newRaffle.id} atualizada com endDate: ${endDate}`,
-        );
-      } catch (error) {
-        this.logger.error(
-          `Erro ao criar rifa pelo cron job: ${(error as any).message}`,
-        );
+          // Se não houver rifas ativas ou se o número de rifas ativas for menor que 6 (considerando extras), cria uma nova
+          if (activeRaffles.length < 6) { // Manter até 6 rifas ativas (fixas + extras)
+              try {
+                  const newRaffle = await this.createSystemRaffle(price);
+                  this.logger.log(`Rifa tradicional de R$ ${price.toFixed(2)} criada pelo cron job (extra/reposição) com id: ${newRaffle.id}`);
+              } catch (error) {
+                  this.logger.error(
+                      `Erro ao criar rifa tradicional de R$ ${price.toFixed(2)} pelo cron job (extra/reposição): ${(error as any).message}`,
+                  );
+              }
+          }
       }
-    }
-
-    this.logger.log('Cron job para criar rifas concluído.');
+      this.logger.log('Cron job para criar rifas fixas e extras tradicionais concluído.');
   }
 
   async buyRaffleTickets(
@@ -348,124 +651,125 @@ export class RaffleService {
 
     async getRafflesWithDetails(filters: any = {}): Promise<any[]> {
       const where: any = {};
-  
+
       // Aplicar filtros, se fornecidos
       if (filters.finished !== undefined) { // Filtro de status de finalização EXISTE, usa o valor passado
-        where.finished = filters.finished;
+          where.finished = filters.finished;
       }
       if (filters.winnerUserId) {
-        where.winnerUserId = filters.winnerUserId;
+          where.winnerUserId = filters.winnerUserId;
       }
       if (filters.userId) {
-        where['$tickets.userId$'] = filters.userId;
+          where['$tickets.userId$'] = filters.userId;
       }
       if (filters.type) {
-        where.type = filters.type;
+          where.type = filters.type;
       }
       if (filters.startDate) {
-        where.startDate = {
-          [Op.gte]: new Date(filters.startDate),
-        };
+          where.startDate = {
+              [Op.gte]: new Date(filters.startDate),
+          };
       }
       if (filters.endDate) {
-        where.endDate = {
-          [Op.lte]: new Date(filters.endDate),
-        };
+          where.endDate = {
+              [Op.lte]: new Date(filters.endDate),
+          };
       }
       // FILTRO DE STATUS DE FINALIZAÇÃO JÁ ESTAVA SENDO APLICADO AQUI (CORREÇÃO ANTERIOR), APENAS ASSEGURANDO QUE ESTÁ CORRETO
       // if (filters.finished !== undefined) {
       //   where.finished = filters.finished === 'true'; // <--- CORREÇÃO: REMOVENDO '=== "true"'
       // }
-  
+
       const raffles = await this.raffleModel.findAll({
-        include: [
-          {
-            model: RaffleTicket,
-            as: 'tickets',
-            include: [
+          include: [
               {
-                model: User,
-                attributes: ['id', 'name', 'email'],
-              },
-            ],
-          },
-          /*{
-            model: User,
-            as: 'createdByUser',
-            attributes: ['id', 'name', 'email'],
-          },*/
-          {
-            model: User,
-            as: 'winnerUser',
-            attributes: ['id', 'name', 'email'],
-          },
-          {
-            model: RaffleNumber,
-            include: [
-              {
-                model: GeneratedNumber,
-                include: [
-                  {
-                    model: Seed,
-                    include: [
+                  model: RaffleTicket,
+                  as: 'tickets',
+                  include: [
                       {
-                        model: BlockchainHash,
+                          model: User,
+                          attributes: ['id', 'name', 'email'],
                       },
-                    ],
-                  },
-                ],
+                  ],
               },
-            ],
-          },
-        ],
-        where, // APLICANDO A CLAUSULA 'WHERE' COM TODOS OS FILTROS (tipo, data, finished)
-        order: [['createdAt', 'DESC']],
+              /*{
+                model: User,
+                as: 'createdByUser',
+                attributes: ['id', 'name', 'email'],
+              },*/
+              {
+                  model: User,
+                  as: 'winnerUser',
+                  attributes: ['id', 'name', 'email'],
+              },
+              {
+                  model: RaffleNumber,
+                  include: [
+                      {
+                          model: GeneratedNumber,
+                          include: [
+                              {
+                                  model: Seed,
+                                  include: [
+                                      {
+                                          model: BlockchainHash,
+                                      },
+                                  ],
+                              },
+                          ],
+                      },
+                  ],
+              },
+          ],
+          where, // APLICANDO A CLAUSULA 'WHERE' COM TODOS OS FILTROS (tipo, data, finished)
+          order: [['createdAt', 'DESC']],
       });
-  
+
       return raffles.map((raffle) => {
-        let winningTeam = null;
-        if (raffle.type === 'equipes' && raffle.finished) {
-          const winningDezena = raffle.winningTicket;
-          const formattedTeams = this.getFormattedTeams(raffle);
-          const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningDezena);
-          winningTeam = formattedTeams[winningTeamName];
-        }
-  
-        return {
-          id: raffle.id,
-          raffleIdentifier: raffle.raffleIdentifier,
-          type: raffle.type,
-          /* createdBy: raffle.createdByUser
-            ? {
-                id: raffle.createdByUser.id,
-                name: raffle.createdByUser.name,
-                email: raffle.createdByUser.email,
-              }
-            : null,*/
-          winner: raffle.winnerUser
-            ? {
-                id: raffle.winnerUser.id,
-                name: raffle.winnerUser.name,
-                email: raffle.winnerUser.email,
-              }
-            : null,
-          winningTeam: winningTeam,
-          title: raffle.title,
-          description: raffle.description,
-          ticketPrice: raffle.ticketPrice,
-          totalTickets: raffle.totalTickets,
-          soldTickets: raffle.soldTickets,
-          startDate: raffle.startDate,
-          endDate: raffle.endDate,
-          drawDate: raffle.drawDate,
-          finished: raffle.finished,
-          winningTicket: this.formatWinningTicketInfo(raffle),
-          tickets: this.formatRaffleTickets(raffle),
-          createdAt: raffle.createdAt,
-          updatedAt: raffle.updatedAt,
-        };
+          let winningTeam = null;
+          if (raffle.type === 'equipes' && raffle.finished) {
+              const winningDezena = raffle.winningTicket;
+              const formattedTeams = this.getFormattedTeams(raffle);
+              const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningDezena);
+              winningTeam = formattedTeams[winningTeamName];
+          }
+
+          return {
+              id: raffle.id,
+              raffleIdentifier: raffle.raffleIdentifier,
+              type: raffle.type,
+              /* createdBy: raffle.createdByUser
+                ? {
+                    id: raffle.createdByUser.id,
+                    name: raffle.createdByUser.name,
+                    email: raffle.createdByUser.email,
+                  }
+                : null,*/
+              winner: raffle.winnerUser
+                  ? {
+                      id: raffle.winnerUser.id,
+                      name: raffle.winnerUser.name,
+                      email: raffle.winnerUser.email,
+                  }
+                  : null,
+              winningTeam: winningTeam,
+              title: raffle.title,
+              description: raffle.description,
+              ticketPrice: String(raffle.ticketPrice), // **MODIFICADO: Converter para String**
+              totalTickets: raffle.totalTickets,
+              soldTickets: raffle.soldTickets,
+              startDate: raffle.startDate,
+              endDate: raffle.endDate,
+              drawDate: raffle.drawDate,
+              finished: raffle.finished,
+              winningTicket: raffle.winningTicket, 
+              // winningTicketInfo: this.formatWinningTicketInfo(raffle), // **MODIFICADO: Comentado/Removido**
+              // tickets: this.formatRaffleTickets(raffle), // **MODIFICADO: Comentado/Removido**
+              createdAt: raffle.createdAt,
+              updatedAt: raffle.updatedAt,
+          };
       });
-    }
+  }
 
     private formatWinningTicketInfo(raffle: Raffle): any {
       if (!raffle.finished) {
@@ -1093,33 +1397,34 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
 
   // Parte do serviço da RIFA DE TIME
 
-  async createTeamRaffle(endDate?: Date): Promise<Raffle> {
+  async createTeamRaffle(ticketPrice: number): Promise<Raffle> {
+    this.logger.log(`Criando rifa de equipes do sistema com preço: ${ticketPrice}...`);
     // 1. Encontrar a hash mais recente
     const latestHash = await this.blockchainHashModel.findOne({
-      order: [['timestamp', 'DESC']],
+        order: [['timestamp', 'DESC']],
     });
 
     if (!latestHash) {
-      throw new NotFoundException('Nenhuma hash de blockchain encontrada.');
+        throw new NotFoundException('Nenhuma hash de blockchain encontrada.');
     }
 
     // 2. Encontrar a seed correspondente à hash mais recente
     const correspondingSeed = await this.seedModel.findOne({
-      where: { hashId: latestHash.id },
-      include: [
-        {
-          model: GeneratedNumber,
-          order: [['createdAt', 'DESC']],
-          limit: 1,
-        },
-      ],
-      order: [['createdAt', 'DESC']],
+        where: { hashId: latestHash.id },
+        include: [
+            {
+                model: GeneratedNumber,
+                order: [['createdAt', 'DESC']],
+                limit: 1,
+            },
+        ],
+        order: [['createdAt', 'DESC']],
     });
 
     if (!correspondingSeed || correspondingSeed.generatedNumbers.length === 0) {
-      throw new NotFoundException(
-        'Nenhuma seed ou generatedNumber correspondente encontrado para a hash mais recente.',
-      );
+        throw new NotFoundException(
+            'Nenhuma seed ou generatedNumber correspondente encontrado para a hash mais recente.',
+        );
     }
 
     // 3. Obter o generatedNumber mais recente da seed
@@ -1131,34 +1436,34 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
     // 5. Criar a rifa
     const startDate = new Date();
     const newRaffle = await this.raffleModel.create({
-      raffleIdentifier: `RIFA-EQUIPES-${Date.now()}`,
-      createdBy: null,
-      title: `Rifa de Equipes Automática`,
-      description: `Rifa de equipes gerada automaticamente com base na hash ${latestHash.hash}`,
-      ticketPrice: 10.0,
-      totalTickets: 100,
-      soldTickets: 0,
-      startDate: startDate,
-      endDate: endDate || null,
-      finished: false,
-      winningTicket: lastTwoDigits.toString().padStart(2, '0'),
-      type: 'equipes', // Define o tipo como 'equipes'
+        raffleIdentifier: `RIFA-EQUIPES-${Date.now()}`,
+        createdBy: null,
+        title: `Rifa de Equipes Automática - R$ ${ticketPrice.toFixed(2)}`,
+        description: `Rifa de equipes gerada automaticamente com base na hash ${latestHash.hash} - R$ ${ticketPrice.toFixed(2)}`,
+        ticketPrice: ticketPrice,
+        totalTickets: 100,
+        soldTickets: 0,
+        startDate: startDate,
+        endDate: null, // Removendo endDate fixo por enquanto
+        finished: false,
+        winningTicket: lastTwoDigits.toString().padStart(2, '0'),
+        type: 'equipes', // Define o tipo como 'equipes'
     });
 
     // 6. Criar o RaffleNumber associado
     await this.raffleNumberModel.create({
-      raffleId: newRaffle.id,
-      numberId: latestGeneratedNumber.id,
+        raffleId: newRaffle.id,
+        numberId: latestGeneratedNumber.id,
     });
 
     this.logger.log(
-      `Rifa de Equipes criada com sucesso: ${newRaffle.raffleIdentifier}, winningTicket(temp): ${lastTwoDigits
-        .toString()
-        .padStart(2, '0')}, generatedNumberId: ${latestGeneratedNumber.id}`,
+        `Rifa de Equipes criada com sucesso: ${newRaffle.raffleIdentifier}, winningTicket(temp): ${lastTwoDigits
+            .toString()
+            .padStart(2, '0')}, generatedNumberId: ${latestGeneratedNumber.id}, Preço: R$ ${ticketPrice.toFixed(2)}`,
     );
 
     return newRaffle;
-  }
+}
 
 
     // Método para determinar a equipe vencedora com base na dezena
@@ -1178,8 +1483,10 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
 
       for (let i = 0; i < totalTeams; i++) {
         const teamName = this.teamNames[i];
+        
         const teamTickets: string[] = [];
         const members = {};
+        
 
         for (let j = 0; j < ticketsPerTeam; j++) {
           const ticketNumber = (i * ticketsPerTeam + j)
@@ -1217,39 +1524,36 @@ async getRafflesPlayedByUser(userId: number): Promise<Raffle[]> {
         return this.teamNames;
       }
 
-  // Cron job para criar rifas de equipes a cada 10 segundos
-  @Cron('0 0 */2 * * *')
-  async createTeamRafflesCronJob() {
-    this.logger.log('Iniciando cron job para criar rifas de equipes...');
+    // Cron job para criar rifas de equipes a cada 10 segundos - REMOVIDO/SIMPLIFICADO
+    //@Cron('0 0 */2 * * *')
+    async createTeamRafflesCronJob() {
+      this.logger.log('Iniciando cron job para criar rifas fixas e extras de equipes...');
+      for (const price of this.fixedRafflePrices) {
+          // Verifica se existe alguma rifa de equipe ativa para este preço
+          const activeRaffles = await this.raffleModel.findAll({
+              where: {
+                  ticketPrice: price,
+                  type: 'equipes',
+                  finished: false,
+              },
+          });
 
-    for (const teamName of this.teamNames) {
-      try {
-        const newRaffle = await this.createTeamRaffle();
-        this.logger.log(
-          `Rifa de equipes ${teamName} criada pelo cron job com id: ${newRaffle.id}`,
-        );
-
-        // Define a data de finalização para 2 horas após a criação da rifa
-        const endDate = new Date(
-          newRaffle.createdAt.getTime() + 2 * 60 * 60 * 1000,
-        );
-
-        // Atualiza a rifa com a nova data de finalização
-        await this.raffleModel.update(
-          { endDate: endDate },
-          { where: { id: newRaffle.id } },
-        );
-        this.logger.log(
-          `Rifa de equipes ${newRaffle.id} atualizada com endDate: ${endDate}`,
-        );
-      } catch (error) {
-        this.logger.error(
-          `Erro ao criar rifa de equipes pelo cron job: ${(error as any).message}`,
-        );
+          // Se não houver rifas de equipe ativas ou se o número de rifas ativas for menor que 6 (considerando extras), cria uma nova
+          if (activeRaffles.length < 6) { // Manter até 6 rifas ativas (fixas + extras)
+              try {
+                  const newRaffle = await this.createTeamRaffle(price);
+                  this.logger.log(
+                      `Rifa de equipes de R$ ${price.toFixed(2)} criada pelo cron job (extra/reposição) com id: ${newRaffle.id}`,
+                  );
+              } catch (error) {
+                  this.logger.error(
+                      `Erro ao criar rifa de equipes de R$ ${price.toFixed(2)} pelo cron job (extra/reposição): ${(error as any).message}`,
+                  );
+              }
+          }
       }
-    }
 
-    this.logger.log('Cron job para criar rifas de equipes concluído.');
+      this.logger.log('Cron job para criar rifas fixas e extras de equipes concluído.');
   }
 
   async finalizeTeamRaffle(raffleId: number, transactionHost?: any): Promise<Raffle> {

@@ -59,4 +59,11 @@ export class DiceController {
             this.logger.log(`Buscando detalhes da rodada ${roundId}...`);
           return await this.diceService.getDiceRoundByIdWithDetails(roundId);
         }
+
+        @Get('test-endpoint')
+        async testEndpoint(): Promise<null> { // Modifique o tipo de retorno para null
+            this.logger.log('Endpoint de teste chamado...');
+            return null; // Retorne null
+        }
+    
 }

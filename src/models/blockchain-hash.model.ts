@@ -25,4 +25,6 @@ export class BlockchainHash extends Model {
 
   @HasMany(() => Seed)
   seeds!: Seed[];
+  static hash: any;
+  static timestamp: any;
 }

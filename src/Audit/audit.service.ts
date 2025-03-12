@@ -54,6 +54,8 @@ export class AuditService {
         };
 }
 
+
+
   async generateNumbersFromHash(hash: string): Promise<any> {
         // 1. Buscar o hash
       const blockchainHash = await this.blockchainHashModel.findOne({ where: { hash } });

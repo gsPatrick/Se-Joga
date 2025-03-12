@@ -21,4 +21,13 @@ export class AuditController {
           this.logger.log(`Gerando numeros para o hash ${hash}...`);
           return await this.auditService.generateNumbersFromHash(hash);
     }
+
+
+    @Get('test-endpoint')
+    async testEndpoint(): Promise<null> { // Modifique o tipo de retorno para null
+        this.logger.log('Endpoint de teste chamado...');
+        return null; // Retorne null
+    }
+
+
 }

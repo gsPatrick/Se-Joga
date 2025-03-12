@@ -68,4 +68,5 @@ export class DiceBet extends Model {
     defaultValue: DataType.NOW,
   })
   createdAt!: Date;
+    type: string | undefined;
 }
