@@ -1,6 +1,7 @@
+// src/app.module.ts
 import { Module } from '@nestjs/common';
 import { SequelizeModule } from '@nestjs/sequelize';
-import { ConfigModule, ConfigService } from '@nestjs/config'; // Import ConfigModule
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { User } from './models/user/user.model';
 import { Raffle } from './models/raffle/raffle.model';
 import { RaffleTicket } from './models/raffle/raffle-ticket.model';
@@ -29,6 +30,11 @@ import { Bet } from './models/bet/bet.model';
 import { DiceRoundSeed } from './models/dice/dice_round_seeds';
 import { BetGameRoundSeed } from './models/bet/bet-game-round.model-seed';
 import { BingoGameSeed } from './models/bingo/bingo_game_seeds';
+import { PokerRound } from './models/poker/poker-round.model'; // Import Poker models
+import { PokerPlayer } from './models/poker/poker-player.model';
+import { PokerHand } from './models/poker/poker-hand.model';
+import { PokerBet } from './models/poker/poker-bet.model';
+import { PokerRoundSeed } from './models/poker/poker-round-seed.model';
 
 import { AuthModule } from './Auth/auth.module';
 import { RaffleModule } from './Raflle/raffle.module';
@@ -38,18 +44,19 @@ import { BingoModule } from './Bingo/bingo.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { DiceModule } from './Dice/dice.module';
 import { BetModule } from './Bet/bet.module';
+import { PokerModule } from './poker/poker.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ // Configure ConfigModule to load .env files
-      envFilePath: '.env', // Specify the path to your .env file (optional, defaults to .env in root)
-      isGlobal: true,       // Make ConfigService globally available
+    ConfigModule.forRoot({
+      envFilePath: '.env',
+      isGlobal: true,
     }),
-    SequelizeModule.forRootAsync({ // Use forRootAsync for dynamic configuration
-      imports: [ConfigModule], // Import ConfigModule to access ConfigService
-      useFactory: async (configService: ConfigService) => ({ // Inject ConfigService
+    SequelizeModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => ({
         dialect: 'postgres',
-        host: configService.get<string>('DB_HOST'), // Access environment variables using ConfigService
+        host: configService.get<string>('DB_HOST'),
         port: configService.get<number>('DB_PORT'),
         username: configService.get<string>('DB_USER'),
         password: configService.get<string>('DB_PASSWORD'),
@@ -83,11 +90,16 @@ import { BetModule } from './Bet/bet.module';
           DiceRoundSeed,
           BingoGameSeed,
           Seed,
+          PokerRound, // Add Poker models to AppModule
+          PokerPlayer,
+          PokerHand,
+          PokerBet,
+          PokerRoundSeed,
         ],
         autoLoadModels: true,
         synchronize: true,
       }),
-      inject: [ConfigService], // Inject ConfigService into the factory function
+      inject: [ConfigService],
     }),
     AuthModule,
     HashModule,
@@ -96,7 +108,9 @@ import { BetModule } from './Bet/bet.module';
     DiceModule,
     BingoModule,
     BetModule,
+    PokerModule,
     ScheduleModule.forRoot(),
   ],
+  exports: [SequelizeModule], // EXPORTAR SequelizeModule AQUI!
 })
 export class AppModule {}
