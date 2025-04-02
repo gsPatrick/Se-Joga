@@ -45,6 +45,8 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { DiceModule } from './Dice/dice.module';
 import { BetModule } from './Bet/bet.module';
 import { PokerModule } from './poker/poker.module';
+import { CacaNiquelModule } from './caca-niquel/caca-niquel.module'; 
+
 
 @Module({
   imports: [
@@ -109,6 +111,7 @@ import { PokerModule } from './poker/poker.module';
     BingoModule,
     BetModule,
     PokerModule,
+    CacaNiquelModule,
     ScheduleModule.forRoot(),
   ],
   exports: [SequelizeModule], // EXPORTAR SequelizeModule AQUI!
