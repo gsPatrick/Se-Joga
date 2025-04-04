@@ -148,64 +148,84 @@ export class RaffleService {
 
   // Função auxiliar para calcular detalhes do prêmio
   private calculatePrizeDetails(raffle: Raffle): any {
-    if (!raffle.finished) {
-      return null; // Sem prêmio definido ainda
-    }
+    // NÃO retorna null se não estiver finalizada. Calcula o potencial.
 
-    const totalCollected = raffle.ticketPrice * raffle.soldTickets; // Baseado nos vendidos para ser mais justo? Ou usar totalTickets? Usando totalTickets como no código de finalização original.
-    const totalPotentialPrize = raffle.ticketPrice * raffle.totalTickets; // Prêmio total se todos vendidos
+    // Usa o valor total POTENCIAL baseado em todos os bilhetes para consistência
+    const totalPotentialValue = raffle.ticketPrice * raffle.totalTickets;
+
+    // Validação básica para evitar NaN ou valores negativos
+    if (isNaN(totalPotentialValue) || totalPotentialValue <= 0 || !raffle.ticketPrice || !raffle.totalTickets) {
+         return {
+             totalPrize: 0,
+             winnerPrize: 0, // Adiciona para consistência
+             teamPrizePool: 0, // Adiciona para consistência
+             teamMemberPrize: 0, // Adiciona para consistência
+             winningTeamName: null, // Adiciona para consistência
+             details: "Não foi possível calcular os detalhes do prêmio (dados inválidos)."
+         };
+    }
 
     if (raffle.type === 'tradicional') {
-      const prizeAmount = totalPotentialPrize * 0.7;
+      const potentialPrizeAmount = totalPotentialValue * 0.7; // 70% do total
       return {
-        totalPrize: prizeAmount,
-        winnerPrize: prizeAmount,
-        details: `Prêmio total: R$ ${prizeAmount.toFixed(2)} (70% do total arrecadado com ${raffle.totalTickets} bilhetes)`
+        totalPrize: potentialPrizeAmount, // Mostra o valor total do prêmio
+        winnerPrize: potentialPrizeAmount, // Para tradicional, é o mesmo valor
+        teamPrizePool: 0, // Não aplicável
+        teamMemberPrize: 0, // Não aplicável
+        winningTeamName: null, // Não aplicável
+        // Detalhes mudam se já foi finalizada ou não
+        details: raffle.finished
+            ? `Prêmio Distribuído: R$ ${potentialPrizeAmount.toFixed(2)} (70% do valor total potencial de R$ ${totalPotentialValue.toFixed(2)})`
+            : `Prêmio Estimado: R$ ${potentialPrizeAmount.toFixed(2)} (70% do valor total potencial de R$ ${totalPotentialValue.toFixed(2)}, se todos os bilhetes forem vendidos)`
       };
     } else if (raffle.type === 'equipes') {
-      const mainPrize = totalPotentialPrize * 0.5;
-      const teamPrizePool = totalPotentialPrize * 0.3;
-      const banca = totalPotentialPrize * 0.2; // 20% para a banca
+      const potentialMainPrize = totalPotentialValue * 0.5; // 50%
+      const potentialTeamPrizePool = totalPotentialValue * 0.3; // 30%
+      const banca = totalPotentialValue * 0.2; // 20%
 
-      if (!raffle.winningTicket || !raffle.tickets || raffle.tickets.length === 0) {
-          return { // Retorna estrutura mesmo sem detalhes se algo faltar
-            totalPrize: mainPrize + teamPrizePool,
-            mainWinnerPrize: mainPrize,
-            teamPrizePool: teamPrizePool,
-            teamMemberPrize: 0,
-            winningTeamName: 'N/A',
-            details: `Rifa finalizada, mas dados insuficientes para calcular divisão do prêmio da equipe. Prêmio principal (50%): R$ ${mainPrize.toFixed(2)}. Pool da Equipe (30%): R$ ${teamPrizePool.toFixed(2)}. Banca (20%): R$ ${banca.toFixed(2)}.`
-          };
-      }
+      let winningTeamName: string | null = null;
+      let numberOfTeamMembers = 0; // Membros da equipe vencedora (excluindo vencedor principal)
+      let actualTeamMemberPrize = 0; // Prêmio individual real por membro
 
-      const winningTeamName = this.getTeamNameByTicketNumber(raffle, raffle.winningTicket);
-      // Encontrar todos os tickets da equipe vencedora E que foram comprados
-      const winningTeamTickets = raffle.tickets.filter(
-        (ticket) => this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber) === winningTeamName
-      );
+      // Calcula a distribuição real SOMENTE se a rifa estiver finalizada E tiver dados
+      if (raffle.finished && raffle.winningTicket && raffle.tickets && raffle.tickets.length > 0 && raffle.winnerUserId !== undefined) { // winnerUserId deve estar presente
+          winningTeamName = this.getTeamNameByTicketNumber(raffle, raffle.winningTicket); // Nome da equipe vencedora real
 
-       // Identificar usuários únicos na equipe vencedora (excluindo o vencedor principal se ele estiver na equipe)
-      const mainWinnerUserId = raffle.winnerUserId;
-      const teamMemberUserIds = new Set<number>();
-      winningTeamTickets.forEach(ticket => {
-          if (ticket.userId !== mainWinnerUserId) {
-              teamMemberUserIds.add(ticket.userId);
+          if (winningTeamName && winningTeamName !== 'N/A' && winningTeamName !== 'Inválido' && winningTeamName !== 'Erro') {
+              // Encontra tickets da equipe vencedora
+              const winningTeamTickets = raffle.tickets.filter(
+                  (ticket) => this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber) === winningTeamName
+              );
+
+              // Identifica membros únicos (excluindo o vencedor principal)
+              const teamMemberUserIds = new Set<number>();
+              winningTeamTickets.forEach(ticket => {
+                  if (ticket.userId && ticket.userId !== raffle.winnerUserId) { // Compara com winnerUserId da rifa
+                      teamMemberUserIds.add(ticket.userId);
+                  }
+              });
+              numberOfTeamMembers = teamMemberUserIds.size;
+              actualTeamMemberPrize = numberOfTeamMembers > 0 ? potentialTeamPrizePool / numberOfTeamMembers : 0; // Calcula prêmio por membro
+          } else {
+               winningTeamName = "Indeterminado"; // Caso não consiga calcular o nome
           }
-      });
-
-      const numberOfTeamMembers = teamMemberUserIds.size;
-      const teamMemberPrize = numberOfTeamMembers > 0 ? teamPrizePool / numberOfTeamMembers : 0;
+      }
+      // Se não estiver finalizada, winningTeamName continua null, numberOfTeamMembers e actualTeamMemberPrize são 0
 
       return {
-        totalPrize: mainPrize + teamPrizePool,
-        mainWinnerPrize: mainPrize, // Prêmio do bilhete sorteado exato
-        teamPrizePool: teamPrizePool, // Total para dividir entre outros membros da equipe
-        teamMemberPrize: teamMemberPrize, // Valor por membro (excluindo vencedor principal)
-        winningTeamName: winningTeamName,
-        details: `Prêmio Principal (50%): R$ ${mainPrize.toFixed(2)}. Prêmio Equipe (30%): R$ ${teamPrizePool.toFixed(2)} dividido entre ${numberOfTeamMembers} membro(s) (R$ ${teamMemberPrize.toFixed(2)} cada). Banca (20%): R$ ${banca.toFixed(2)}.`
+        totalPrize: potentialMainPrize + potentialTeamPrizePool, // Soma dos prêmios potenciais dos jogadores
+        mainWinnerPrize: potentialMainPrize, // Prêmio potencial (50%) do bilhete exato
+        teamPrizePool: potentialTeamPrizePool, // Pool potencial (30%) da equipe
+        teamMemberPrize: raffle.finished ? actualTeamMemberPrize : 0, // Mostra o prêmio REAL por membro se finalizado, senão 0
+        winningTeamName: raffle.finished ? (winningTeamName ?? "N/A") : null, // Mostra a equipe REAL se finalizado, senão null
+        // Detalhes mudam se já foi finalizada ou não
+        details: raffle.finished
+            ? `Distribuição Finalizada: Prêmio Principal (50%): R$ ${potentialMainPrize.toFixed(2)}. Pool Equipe ${winningTeamName ?? 'N/A'} (30%): R$ ${potentialTeamPrizePool.toFixed(2)} dividido entre ${numberOfTeamMembers} membro(s) (R$ ${actualTeamMemberPrize.toFixed(2)} cada). Banca (20%): R$ ${banca.toFixed(2)}.`
+            : `Estimativa de Prêmios: Principal (50%): R$ ${potentialMainPrize.toFixed(2)}. Pool Equipe (30%): R$ ${potentialTeamPrizePool.toFixed(2)} (a ser dividido entre membros da equipe vencedora, excluindo o portador do bilhete sorteado). Banca (20%): R$ ${banca.toFixed(2)}.`
       };
     }
 
+    // Caso surja um novo tipo de rifa não tratado
     return null;
   }
 
