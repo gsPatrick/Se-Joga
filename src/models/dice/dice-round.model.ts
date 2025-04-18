@@ -1,6 +1,7 @@
-import { Table, Column, Model, DataType, ForeignKey, BelongsTo, HasMany } from 'sequelize-typescript';
+import { Table, Column, Model, DataType, ForeignKey, BelongsTo, HasMany, HasOne } from 'sequelize-typescript'; // Adicionado HasOne
 import { User } from '../user/user.model';
 import { DiceBet } from './dice-bet.model';
+import { DiceRoundSeed } from './dice_round_seeds'; // Garanta que a importação está correta
 
 @Table
 export class DiceRound extends Model {
@@ -25,7 +26,7 @@ export class DiceRound extends Model {
     type: DataType.STRING,
     allowNull: false,
   })
-  hash!: string;
+  hash!: string; // Considerar se realmente precisa disso aqui ou busca via Seed/Hash
 
   @Column({
     type: DataType.DATE,
@@ -43,5 +44,10 @@ export class DiceRound extends Model {
 
   @HasMany(() => DiceBet)
   bets!: DiceBet[];
-    diceRoundSeed: any;
+
+  // --- CORREÇÃO AQUI ---
+  // Adiciona a associação HasOne para DiceRoundSeed
+  @HasOne(() => DiceRoundSeed, 'roundId') // 'roundId' é a foreign key em DiceRoundSeed
+  diceRoundSeed!: DiceRoundSeed; // Define o tipo correto (não 'any')
+  // ---------------------
 }

@@ -1,6 +1,6 @@
 import {
   Table,
-  Column,
+  Column, // Certifique-se que Column está importado
   Model,
   DataType,
   ForeignKey,
@@ -40,9 +40,9 @@ export class DiceBet extends Model {
 
   @Column({
     type: DataType.INTEGER,
-    allowNull: false,
+    allowNull: true, // Permite null para tipos aleatórios
   })
-  betNumber!: number; // O número em que o usuário apostou (1-6)
+  betNumber!: number | null; // O número em que o usuário apostou (ou null)
 
   @Column({
     type: DataType.DECIMAL(10, 2),
@@ -53,14 +53,22 @@ export class DiceBet extends Model {
   @Column({
     type: DataType.BOOLEAN,
     allowNull: false,
+    defaultValue: false, // Define um padrão
   })
   win!: boolean; // Resultado da aposta (true se ganhou, false se perdeu)
 
   @Column({
-    type: DataType.INTEGER,
+    type: DataType.INTEGER, // Ou talvez STRING se for guardar combinações complexas?
     allowNull: false,
   })
-  generatedNumber!: number; // Número gerado pelo sistema
+  generatedNumber!: number; // Número(s) gerado(s) pelo sistema
+
+  @Column({ // <--- MODIFICAÇÃO AQUI ---
+    type: DataType.STRING, // Ou ENUM se preferir mais segurança
+    allowNull: false,      // O tipo da aposta não deve ser nulo
+  })                       // -----------------------------
+  // Substitui 'soma' por 'soma_dupla' e 'soma_tripla'
+  type!: 'par_escolhido' | 'tripla_escolhida' | 'soma_dupla' | 'soma_tripla' | 'aleatorio_dupla' | 'aleatorio_tripla'; // Define os tipos possíveis
 
   @Column({
     type: DataType.DATE,
@@ -68,5 +76,6 @@ export class DiceBet extends Model {
     defaultValue: DataType.NOW,
   })
   createdAt!: Date;
-    type: string | undefined;
+
+  // Não precisa mais da propriedade solta 'type: string | undefined;'
 }
