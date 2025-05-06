@@ -1,5 +1,5 @@
 // src/app.module.ts
-import { Module, Logger } from '@nestjs/common'; // Importar Logger aqui
+import { Module, Logger } from '@nestjs/common';
 import { SequelizeModule } from '@nestjs/sequelize';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -71,19 +71,19 @@ import { PaymentModule } from './payment/payment.module';
     }),
 
     SequelizeModule.forRootAsync({
-      imports: [ConfigModule], // Ainda importa ConfigModule para acessar ConfigService em outros lugares
-      useFactory: async (configService: ConfigService) => { // Injete ConfigService aqui, mesmo que não use para credenciais DB, pode ser útil para outras configs
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => { // Mantenha ConfigService injetado
         console.log("***** SEQUELIZE CONFIGURATION FACTORY IS RUNNING! *****");
 
         // *** ADVERTÊNCIA EXTREMA: CREDENCIAIS HARDCODED ***
         // ISTO É APENAS PARA FACILITAR TESTES INICIAIS EM AMBIENTES DEV ISOLADOS.
         // NUNCA USE CREDENCIAIS DIRETAMENTE NO CÓDIGO EM PRODUÇÃO!
-        // USE ConfigService.get<string>('DB_HOST') etc. em produção.
-        const dbHost = 'jackbear_sejoga'; // Use ConfigService.get('DB_HOST') em produção!
-        const dbPort = 5432;             // Use ConfigService.get('DB_PORT') em produção!
-        const dbUser = 'seJoga';         // Use ConfigService.get('DB_USER') em produção!
-        const dbPassword = 'seJoga';     // Use ConfigService.get('DB_PASSWORD') em produção!
-        const dbName = 'seJoga';         // Use ConfigService.get('DB_NAME') em produção!
+        // USE configService.get<string>('DB_HOST') etc. em produção.
+        const dbHost = 'jackbear_sejoga'; // Use configService.get('DB_HOST') em produção!
+        const dbPort = 5432;             // Use configService.get('DB_PORT') em produção!
+        const dbUser = 'seJoga';         // Use configService.get('DB_USER') em produção!
+        const dbPassword = 'seJoga';     // Use configService.get('DB_PASSWORD') em produção!
+        const dbName = 'seJoga';         // Use configService.get('DB_NAME') em produção!
         // *** FIM DA ADVERTÊNCIA EXTREMA ***
 
 
@@ -102,15 +102,15 @@ import { PaymentModule } from './payment/payment.module';
         ];
 
 
-        // --- Configuração para Sincronização Automática (Perigoso em Produção!) ---
+        // --- Configuração para Sincronização Automática COM FORCE TRUE (Altamente Perigoso em Produção!) ---
         console.warn(`
         **********************************************************************
-        *  [DB Setup - **PERIGO!**] synchronize: true ATIVADO!               *
-        *  ISSO SINCRONIZA O BANCO DE DADOS AUTOMATICAMENTE COM SEUS MODELOS.*
-        *  PODE DESTRUIR DADOS EXISTENTES EM PRODUÇÃO!                       *
-        *  USE APENAS EM AMBIENTES DE DESENVOLVIMENTO ISOLADOS OU PARA       *
+        *  [DB Setup - **DESTRUTIVO!**] synchronize: true e FORCE: true!     *
+        *  ISSO VAI DELETAR TODOS OS DADOS E TABELAS E RECRIA-LOS!           *
+        *  Use APENAS EM AMBIENTES DE DESENVOLVIMENTO ISOLADOS OU PARA       *
         *  CRIAR A ESTRUTURA INICIAL EM UM BANCO DE DADOS VAZIO EM DEV.      *
-        *  **NUNCA USE EM PRODUÇÃO!** USE MIGRAÇÕES!                         *
+        *  **NUNCA, JAMAIS USE EM PRODUÇÃO!** Use migrações!                 *
+        *  RISCO GRAVÍSSIMO E CERTO DE PERDA DE DADOS!                       *
         **********************************************************************
         `);
 
@@ -128,10 +128,11 @@ import { PaymentModule } from './payment/payment.module';
           models: allModels, // Usa a lista completa de modelos
           autoLoadModels: true, // Carrega modelos automaticamente (útil com synchronize)
           synchronize: true, // *** ATIVADO: Cria/atualiza tabelas automaticamente ***
+          force: true,       // *** ATIVADO: DROPA tabelas antes de criar ***
           logging: (sql) => { console.log('[SEQUELIZE SQL - SYNC]:', sql); }, // Mostra o SQL gerado
         };
       },
-      inject: [ConfigService], // Mantenha o inject para poder injetar ConfigService acima
+      inject: [ConfigService], // Mantenha o inject
     }),
 
     // Seus Módulos de Funcionalidade
