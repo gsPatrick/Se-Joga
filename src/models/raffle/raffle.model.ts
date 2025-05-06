@@ -13,6 +13,9 @@ import { RaffleNumber } from './raffle-number.model';
 
 @Table({ tableName: 'raffles' })
 export class Raffle extends Model {
+  static map(arg0: (raffle: any) => any): any {
+    throw new Error('Method not implemented.');
+  }
   @Column({
     type: DataType.INTEGER,
     autoIncrement: true,

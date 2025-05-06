@@ -7,10 +7,13 @@ import { GeneratedNumber } from '../models/generated-number.model';
 import { Seed } from '../models/seed.model';
 import { RaffleNumber } from '../models/raffle/raffle-number.model';
 import { RaffleTicket } from 'src/models/raffle/raffle-ticket.model';
-import { Sequelize } from 'sequelize-typescript';
+import { Sequelize } from 'sequelize-typescript'; // Use Sequelize from sequelize-typescript for typings
+import { Transaction } from 'sequelize'; // Import Transaction from 'sequelize'
 import { User } from '../models/user/user.model';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Op } from 'sequelize';
+import { AuthService } from 'src/Auth/auth.service'; // Importar AuthService
+
 
 @Injectable()
 export class RaffleService {
@@ -38,9 +41,9 @@ export class RaffleService {
     @InjectModel(Seed) private seedModel: typeof Seed,
     @InjectModel(User) private userModel: typeof User,
     @InjectModel(RaffleTicket) private raffleTicketModel: typeof RaffleTicket,
-    private sequelize: Sequelize,
+    private sequelize: Sequelize, // Usando Sequelize de sequelize-typescript
+    private authService: AuthService, // Injetar AuthService
   ) { }
-
 
   async initializeFixedRaffles() {
     this.logger.log('Inicializando rifas fixas...');
@@ -148,80 +151,263 @@ export class RaffleService {
 
   // Função auxiliar para calcular detalhes do prêmio
   private calculatePrizeDetails(raffle: Raffle): any {
-    // NÃO retorna null se não estiver finalizada. Calcula o potencial.
-
-    // Usa o valor total POTENCIAL baseado em todos os bilhetes para consistência
-    const totalPotentialValue = raffle.ticketPrice * raffle.totalTickets;
+    const totalCollectedValue = raffle.ticketPrice * raffle.soldTickets; // Usar vendidos para prêmio real
+    const totalPotentialValue = raffle.ticketPrice * raffle.totalTickets; // Usar total para estimativa
 
     // Validação básica para evitar NaN ou valores negativos
-    if (isNaN(totalPotentialValue) || totalPotentialValue <= 0 || !raffle.ticketPrice || !raffle.totalTickets) {
+    if (isNaN(totalCollectedValue) || totalCollectedValue < 0 || !raffle.ticketPrice || !raffle.totalTickets) {
          return {
-             totalPrize: 0,
-             winnerPrize: 0, // Adiciona para consistência
-             teamPrizePool: 0, // Adiciona para consistência
-             teamMemberPrize: 0, // Adiciona para consistência
-             winningTeamName: null, // Adiciona para consistência
+             totalCollected: 0,
+             houseShare: 0,
+             totalDistributedToPlayers: 0,
+             mainWinnerPotentialPrize: 0, // Novo campo
+             mainWinnerNetPrize: raffle.finished ? 0 : null, // Novo campo (real se finalizado)
+             mainWinnerReferrerCommission: raffle.finished ? 0 : null, // Novo campo (real se finalizado)
+             mainWinnerReferrerActive: raffle.finished ? false : null, // Novo campo: indicador ativo no mês?
+             teamPrizePoolPotential: 0, // Novo campo
+             teamMembersTotalNetPrize: raffle.finished ? 0 : null, // Novo campo (real se finalizado)
+             teamMembersReferrerCommissionTotal: raffle.finished ? 0 : null, // Novo campo (real se finalizado)
+              // Novo campo: lista de membros da equipe com status de indicação e prêmio
+            teamMembersDetails: raffle.finished ? [] : null,
+             winningTeamName: raffle.finished ? (raffle as any).winningTeamName ?? "Indeterminado" : null, // Obter nome real se finalizado
+             numberOfWinningTeamMembersReceivingPrize: raffle.finished ? (raffle as any).winningTeamMembersCount ?? 0 : null, // Novo campo (real se finalizado)
              details: "Não foi possível calcular os detalhes do prêmio (dados inválidos)."
          };
     }
 
+    let actualTotalPrizeDistributed = 0; // Total que foi pago aos jogadores E seus indicadores
+
     if (raffle.type === 'tradicional') {
-      const potentialPrizeAmount = totalPotentialValue * 0.7; // 70% do total
+      // Prêmio real é 85% do valor *coletado* (vendido)
+      const actualPrizePool = totalCollectedValue * 0.85;
+      const houseShareBase = totalCollectedValue * 0.15; // Parte BASE que fica com a casa (15%)
+
+      let mainWinnerNetPrize = 0;
+      let mainWinnerReferrerCommission = 0;
+      let mainWinnerReferrerActive = false; // Status de atividade do indicador do ganhador principal
+
+      if (raffle.finished && raffle.winnerUserId !== undefined && raffle.winnerUserId !== null) {
+           // Se finalizado e tem vencedor, precisamos saber se o vencedor foi indicado
+           // Assume que winnerUser foi incluído com referrerId e referrer (pelo reload na finalização)
+           const winnerUserWithReferrer = (raffle as any).winnerUser;
+
+           if (winnerUserWithReferrer?.referrerId) {
+               mainWinnerReferrerActive = (raffle as any).mainWinnerReferrerActive; // Pega o status calculado na finalização
+
+               // O cálculo da comissão e prêmio líquido é feito na finalização.
+               // Aqui, apenas usamos os valores que deveriam ter sido calculados e armazenados/passados.
+               // Como não estamos recarregando com valores distribuídos, apenas com o usuário,
+               // precisamos recalcular a lógica base para a exibição.
+               // O valor REAL pago já está no banco (saldo do usuário).
+               // Para exibir AQUI, podemos usar a lógica base de 85/5/95 e o status de atividade.
+
+               const potentialReferrerCommission = actualPrizePool * 0.05;
+               const potentialWinnerNetPrize = actualPrizePool * 0.95;
+
+               if (mainWinnerReferrerActive) {
+                   mainWinnerReferrerCommission = potentialReferrerCommission;
+                   mainWinnerNetPrize = potentialWinnerNetPrize;
+               } else {
+                   // Comissão não foi para o indicador, foi para a casa. Ganhador recebe o total.
+                   mainWinnerNetPrize = actualPrizePool; // Ganhador recebe os 85% inteiros
+                   mainWinnerReferrerCommission = 0; // Comissão não creditada
+               }
+
+           } else {
+               // Ganhador não tem indicador. Ganhador recebe o prêmio total (85%).
+               mainWinnerNetPrize = actualPrizePool;
+               mainWinnerReferrerCommission = 0;
+               mainWinnerReferrerActive = false; // Não há indicador, status irrelevante (ou false)
+           }
+           actualTotalPrizeDistributed = mainWinnerNetPrize + mainWinnerReferrerCommission;
+
+      } else {
+          // Rifa não finalizada ou sem vencedor
+          actualTotalPrizeDistributed = 0; // Nenhum prêmio foi distribuído ainda
+          mainWinnerNetPrize = 0;
+          mainWinnerReferrerCommission = 0;
+      }
+        // A share da casa REAL é o total coletado menos o total distribuído para jogadores/indicadores
+        const actualHouseShare = totalCollectedValue - actualTotalPrizeDistributed;
+
+
       return {
-        totalPrize: potentialPrizeAmount, // Mostra o valor total do prêmio
-        winnerPrize: potentialPrizeAmount, // Para tradicional, é o mesmo valor
-        teamPrizePool: 0, // Não aplicável
-        teamMemberPrize: 0, // Não aplicável
+        totalCollected: totalCollectedValue, // Valor total arrecadado com a venda de bilhetes
+        houseShare: actualHouseShare, // Parte REAL que ficou com a casa (inclui comissões não ativas)
+        totalDistributedToPlayers: actualTotalPrizeDistributed, // Total que saiu da casa para jogadores/indicadores
+        mainWinnerPotentialPrize: totalPotentialValue * 0.85, // Estimativa se todos os bilhetes fossem vendidos (85%)
+        mainWinnerNetPrize: raffle.finished ? mainWinnerNetPrize : null, // Prêmio líquido REAL do ganhador (se finalizado)
+        mainWinnerReferrerCommission: raffle.finished ? mainWinnerReferrerCommission : null, // Comissão REAL do indicador (se finalizado)
+        mainWinnerReferrerActive: raffle.finished ? mainWinnerReferrerActive : null, // Indicador ativo no mês (se finalizado)
+        teamPrizePoolPotential: 0, // Não aplicável
+        teamMembersTotalNetPrize: raffle.finished ? 0 : null, // Não aplicável
+        teamMembersReferrerCommissionTotal: raffle.finished ? 0 : null, // Não aplicável
+         teamMembersDetails: raffle.finished ? [] : null, // Não aplicável
         winningTeamName: null, // Não aplicável
-        // Detalhes mudam se já foi finalizada ou não
+        numberOfWinningTeamMembersReceivingPrize: null, // Não aplicável
         details: raffle.finished
-            ? `Prêmio Distribuído: R$ ${potentialPrizeAmount.toFixed(2)} (70% do valor total potencial de R$ ${totalPotentialValue.toFixed(2)})`
-            : `Prêmio Estimado: R$ ${potentialPrizeAmount.toFixed(2)} (70% do valor total potencial de R$ ${totalPotentialValue.toFixed(2)}, se todos os bilhetes forem vendidos)`
+            ? `Distribuição Finalizada (Base em R$ ${totalCollectedValue.toFixed(2)} coletados): Prêmio Pool (85%): R$ ${actualPrizePool.toFixed(2)}. Ganhador Neto: R$ ${mainWinnerNetPrize.toFixed(2)}. Comissão Indicador (Status Ativo: ${mainWinnerReferrerActive ? 'Sim' : 'Não'}): R$ ${mainWinnerReferrerCommission.toFixed(2)}. Casa: R$ ${actualHouseShare.toFixed(2)}.`
+            : `Estimativa de Prêmios (Base em R$ ${totalPotentialValue.toFixed(2)} total potencial): Pool Estimado (85%): R$ ${(totalPotentialValue * 0.85).toFixed(2)}. Comissão Indicador (5% do Prêmio Ganho) e Prêmio Neto (95% do Prêmio Ganho) aplicados APENAS se o ganhador for indicado E o indicador estiver ativo no mês. Casa (15% estimado): R$ ${houseShareBase.toFixed(2)} (inclui potencial comissão não creditada).` // Atualizar % estimado da casa
       };
     } else if (raffle.type === 'equipes') {
-      const potentialMainPrize = totalPotentialValue * 0.5; // 50%
-      const potentialTeamPrizePool = totalPotentialValue * 0.3; // 30%
-      const banca = totalPotentialValue * 0.2; // 20%
+      const actualMainPrizePool = totalCollectedValue * 0.50; // 50% do coletado para o pool principal
+      const actualTeamPrizePool = totalCollectedValue * 0.30; // 30% do coletado para o pool da equipe
+       const houseShareBase = totalCollectedValue * 0.20; // 20% do coletado fica com a casa (base)
 
+      let mainWinnerNetPrize = 0;
+      let mainWinnerReferrerCommission = 0;
+      let mainWinnerReferrerActive = false; // Status de atividade do indicador do ganhador principal
+
+      let teamMembersTotalNetPrize = 0; // Total líquido pago aos membros da equipe (excluindo principal)
+      let teamMembersReferrerCommissionTotal = 0; // Total de comissões pagas aos indicadores dos membros da equipe
+      let teamMembersDetails: any[] = []; // Detalhes de cada membro da equipe vencedora
       let winningTeamName: string | null = null;
-      let numberOfTeamMembers = 0; // Membros da equipe vencedora (excluindo vencedor principal)
-      let actualTeamMemberPrize = 0; // Prêmio individual real por membro
+      let numberOfWinningTeamMembersReceivingPrize = 0; // Contagem real de membros que ganharam no pool
+      let actualTotalPrizeDistributed = 0; // Total distribuído para jogadores/indicadores
 
-      // Calcula a distribuição real SOMENTE se a rifa estiver finalizada E tiver dados
-      if (raffle.finished && raffle.winningTicket && raffle.tickets && raffle.tickets.length > 0 && raffle.winnerUserId !== undefined) { // winnerUserId deve estar presente
-          winningTeamName = this.getTeamNameByTicketNumber(raffle, raffle.winningTicket); // Nome da equipe vencedora real
+      if (raffle.finished) {
+           // Para calcular os prêmios REAIS, precisamos dos tickets com usuários e referrerId
+           // Assume-se que o service finalizeTeamRaffle populou raffle.tickets com user.referrerId
+           winningTeamName = this.getTeamNameByTicketNumber(raffle, raffle.winningTicket);
 
-          if (winningTeamName && winningTeamName !== 'N/A' && winningTeamName !== 'Inválido' && winningTeamName !== 'Erro') {
-              // Encontra tickets da equipe vencedora
-              const winningTeamTickets = raffle.tickets.filter(
-                  (ticket) => this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber) === winningTeamName
-              );
+           // 1. Processar Ganhador Principal (se houver)
+           const mainWinningTicket = raffle.tickets?.find(t => t.ticketNumber === raffle.winningTicket);
+           const mainWinnerUser = mainWinningTicket?.user; // User model fetched with referrerId
 
-              // Identifica membros únicos (excluindo o vencedor principal)
-              const teamMemberUserIds = new Set<number>();
-              winningTeamTickets.forEach(ticket => {
-                  if (ticket.userId && ticket.userId !== raffle.winnerUserId) { // Compara com winnerUserId da rifa
-                      teamMemberUserIds.add(ticket.userId);
-                  }
-              });
-              numberOfTeamMembers = teamMemberUserIds.size;
-              actualTeamMemberPrize = numberOfTeamMembers > 0 ? potentialTeamPrizePool / numberOfTeamMembers : 0; // Calcula prêmio por membro
-          } else {
-               winningTeamName = "Indeterminado"; // Caso não consiga calcular o nome
-          }
+           if (mainWinnerUser) {
+                if (mainWinnerUser.referrerId) {
+                    mainWinnerReferrerActive = (raffle as any).mainWinnerReferrerActive; // Pega o status calculado na finalização
+
+                    const potentialReferrerCommission = actualMainPrizePool * 0.05;
+                    const potentialWinnerNetPrize = actualMainPrizePool * 0.95;
+
+                    if (mainWinnerReferrerActive) {
+                        mainWinnerReferrerCommission = potentialReferrerCommission;
+                        mainWinnerNetPrize = potentialWinnerNetPrize;
+                    } else {
+                        // Comissão não foi para o indicador, foi para a casa. Ganhador recebe o total.
+                        mainWinnerNetPrize = actualMainPrizePool;
+                        mainWinnerReferrerCommission = 0;
+                    }
+                } else {
+                    // Ganhador não tem indicador. Ganhador recebe o prêmio total (50%).
+                    mainWinnerNetPrize = actualMainPrizePool;
+                    mainWinnerReferrerCommission = 0;
+                    mainWinnerReferrerActive = false; // Não há indicador, status irrelevante
+                }
+               actualTotalPrizeDistributed += mainWinnerNetPrize + mainWinnerReferrerCommission;
+
+           } else {
+              // Ninguém comprou o bilhete principal
+              mainWinnerNetPrize = 0;
+              mainWinnerReferrerCommission = 0;
+               mainWinnerReferrerActive = false; // Ninguém ganhou principal
+              // mainWinnerUserId remains null
+           }
+
+
+           // 2. Processar Pool da Equipe (30%)
+           if (winningTeamName !== 'N/A' && winningTeamName !== 'Inválido' && winningTeamName !== 'Erro') {
+                // Filter from the fetched 'tickets' array, exclude the main winner
+                const winningTeamTickets = raffle.tickets?.filter( // Usar raffle.tickets aqui, que foi incluído
+                    (ticket) => this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber) === winningTeamName &&
+                                (mainWinnerUser ? ticket.userId !== mainWinnerUser.id : true) // Excluir o ganhador principal pelo ID se ele existe
+                ) || []; // Garantir que seja um array, mesmo que vazio
+
+                const teamMemberUsersWhoBought = new Map<number, User>(); // Map UserID -> User model (with referrerId)
+                winningTeamTickets.forEach(ticket => {
+                    if (ticket.user) { // Ensure ticket has a user
+                         // Usar apenas o primeiro ticket encontrado por usuário para pegar a instância de usuário
+                        if (!teamMemberUsersWhoBought.has(ticket.user.id)) {
+                             teamMemberUsersWhoBought.set(ticket.user.id, ticket.user);
+                        }
+                    }
+                });
+
+                numberOfWinningTeamMembersReceivingPrize = teamMemberUsersWhoBought.size;
+
+                if (numberOfWinningTeamMembersReceivingPrize > 0) {
+                    const individualTeamPrizeShare = actualTeamPrizePool / numberOfWinningTeamMembersReceivingPrize;
+                     this.logger.log(`Equipe Vencedora ${winningTeamName}: ${numberOfWinningTeamMembersReceivingPrize} membro(s) elegível(is) para o prêmio da equipe (R$ ${actualTeamPrizePool.toFixed(2)}). Parte base individual: R$ ${individualTeamPrizeShare.toFixed(2)}.`);
+
+                    for (const user of teamMemberUsersWhoBought.values()) {
+                        let memberNetPrizeShare = individualTeamPrizeShare;
+                        let memberReferrerCommissionShare = 0;
+                        let memberReferrerActive = false; // Track referrer activity status for this member
+
+                        // Check if this team member has a referrer and if referrer is active this month
+                        if (user.referrerId) {
+                             // Pega o status de atividade do indicador deste membro, calculado na finalização
+                             // Assumindo que finalizeTeamRaffle anexa uma lista de status de indicadores de membros
+                             const memberReferrerStatus = (raffle as any).teamMemberReferrerActiveStatuses?.find(s => s.userId === user.id);
+                             memberReferrerActive = memberReferrerStatus?.isActive || false;
+
+                            const potentialMemberReferrerCommission = individualTeamPrizeShare * 0.05;
+                            const potentialMemberNetPrize = individualTeamPrizeShare * 0.95;
+
+
+                             if (memberReferrerActive) {
+                                 memberReferrerCommissionShare = potentialMemberReferrerCommission;
+                                 memberNetPrizeShare = potentialMemberNetPrize;
+                             } else {
+                                // Comissão não é creditada, fica na Casa. Membro recebe a parte total.
+                                memberNetPrizeShare = individualTeamPrizeShare;
+                                memberReferrerCommissionShare = 0; // Comissão não creditada é 0
+                             }
+                         } else {
+                             // Membro não tem indicador
+                             memberNetPrizeShare = individualTeamPrizeShare;
+                             memberReferrerCommissionShare = 0;
+                             memberReferrerActive = false; // Não há indicador
+                         }
+
+                        teamMembersTotalNetPrize += memberNetPrizeShare;
+                        teamMembersReferrerCommissionTotal += memberReferrerCommissionShare;
+                         teamMembersDetails.push({ // Adicionar detalhes deste membro
+                            userId: user.id,
+                            userName: user.name,
+                            netPrize: memberNetPrizeShare,
+                            referrerCommission: memberReferrerCommissionShare,
+                            referrerActive: memberReferrerActive,
+                            hasReferrer: user.referrerId !== undefined && user.referrerId !== null, // Indica se tinha indicador
+                         });
+                    }
+                     actualTotalPrizeDistributed += teamMembersTotalNetPrize + teamMembersReferrerCommissionTotal;
+                }
+           }
       }
-      // Se não estiver finalizada, winningTeamName continua null, numberOfTeamMembers e actualTeamMemberPrize são 0
+
+       // A share da casa REAL é o total coletado menos o total distribuído para jogadores/indicadores
+       const actualHouseShare = totalCollectedValue - actualTotalPrizeDistributed;
+
 
       return {
-        totalPrize: potentialMainPrize + potentialTeamPrizePool, // Soma dos prêmios potenciais dos jogadores
-        mainWinnerPrize: potentialMainPrize, // Prêmio potencial (50%) do bilhete exato
-        teamPrizePool: potentialTeamPrizePool, // Pool potencial (30%) da equipe
-        teamMemberPrize: raffle.finished ? actualTeamMemberPrize : 0, // Mostra o prêmio REAL por membro se finalizado, senão 0
-        winningTeamName: raffle.finished ? (winningTeamName ?? "N/A") : null, // Mostra a equipe REAL se finalizado, senão null
-        // Detalhes mudam se já foi finalizada ou não
+        totalCollected: totalCollectedValue, // Valor total arrecadado
+        houseShare: actualHouseShare, // Parte REAL que fica com a casa (inclui comissões não ativas)
+        totalDistributedToPlayers: actualTotalPrizeDistributed, // Total que saiu da casa para jogadores/indicadores
+
+        mainWinnerPotentialPrize: totalPotentialValue * 0.50, // Estimativa se todos os bilhetes fossem vendidos (50%)
+        mainWinnerNetPrize: raffle.finished ? mainWinnerNetPrize : null, // Prêmio líquido REAL do ganhador principal (se finalizado)
+        mainWinnerReferrerCommission: raffle.finished ? mainWinnerReferrerCommission : null, // Comissão REAL do indicador do principal (se finalizado)
+        mainWinnerReferrerActive: raffle.finished ? mainWinnerReferrerActive : null, // Indicador do principal ativo (se finalizado)
+
+        teamPrizePoolPotential: totalPotentialValue * 0.30, // Estimativa se todos os bilhetes fossem vendidos (30%)
+        teamMembersTotalNetPrize: raffle.finished ? teamMembersTotalNetPrize : null, // Total líquido REAL distribuído aos membros da equipe (se finalizado)
+        teamMembersReferrerCommissionTotal: raffle.finished ? teamMembersReferrerCommissionTotal : null, // Total de comissões REAL para indicadores dos membros da equipe (se finalizado)
+         teamMembersDetails: raffle.finished ? teamMembersDetails : null, // Detalhes individuais dos membros da equipe vencedora
+        winningTeamName: raffle.finished ? (winningTeamName ?? "N/A") : null, // Nome da equipe vencedora (se finalizado)
+        numberOfWinningTeamMembersReceivingPrize: raffle.finished ? numberOfWinningTeamMembersReceivingPrize : null, // Número de membros da equipe que receberam prêmio (se finalizado)
+
         details: raffle.finished
-            ? `Distribuição Finalizada: Prêmio Principal (50%): R$ ${potentialMainPrize.toFixed(2)}. Pool Equipe ${winningTeamName ?? 'N/A'} (30%): R$ ${potentialTeamPrizePool.toFixed(2)} dividido entre ${numberOfTeamMembers} membro(s) (R$ ${actualTeamMemberPrize.toFixed(2)} cada). Banca (20%): R$ ${banca.toFixed(2)}.`
-            : `Estimativa de Prêmios: Principal (50%): R$ ${potentialMainPrize.toFixed(2)}. Pool Equipe (30%): R$ ${potentialTeamPrizePool.toFixed(2)} (a ser dividido entre membros da equipe vencedora, excluindo o portador do bilhete sorteado). Banca (20%): R$ ${banca.toFixed(2)}.`
+            ? `Distribuição Finalizada (Base em R$ ${totalCollectedValue.toFixed(2)} coletados):` +
+              ` Prêmio Principal (50%): R$ ${actualMainPrizePool.toFixed(2)} (Neto: R$ ${mainWinnerNetPrize.toFixed(2)}, Comissão Indicador: R$ ${mainWinnerReferrerCommission.toFixed(2)}, Indicador Ativo: ${mainWinnerReferrerActive ? 'Sim' : 'Não'}).` +
+              ` Pool Equipe ${winningTeamName ?? 'N/A'} (30%): R$ ${actualTeamPrizePool.toFixed(2)} dividido entre ${numberOfWinningTeamMembersReceivingPrize} membro(s).` +
+              ` Detalhes Membros: ${teamMembersDetails.map(d => `[User ${d.userId}, Neto R$ ${d.netPrize.toFixed(2)}, Comissão Indicador R$ ${d.referrerCommission.toFixed(2)}, Indicador Ativo: ${d.referrerActive ? 'Sim' : 'Não'}]`).join(', ')}.` +
+              ` Casa: R$ ${actualHouseShare.toFixed(2)}.`
+            : `Estimativa de Prêmios (Base em R$ ${totalPotentialValue.toFixed(2)} total potencial):` +
+              ` Principal (50%): R$ ${(totalPotentialValue * 0.50).toFixed(2)}.` +
+              ` Pool Equipe (30%): R$ ${(totalPotentialValue * 0.30).toFixed(2)} (a ser dividido).` +
+              ` Comissão Indicador (5% do Prêmio Ganho) aplicada SOBRE o prêmio individual de cada ganhador (Principal e membros da equipe) APENAS se forem indicados E o indicador estiver ativo no mês. Casa (20% estimado): R$ ${houseShareBase.toFixed(2)} (inclui potencial comissão não creditada).`
       };
     }
 
@@ -231,15 +417,19 @@ export class RaffleService {
 
   // Função auxiliar para formatar bilhete (0-99 para 1-100)
   private formatTicketNumberDisplay(ticketNumber: string): string {
-      if (!ticketNumber) return 'N/A';
-      try {
-          const num = parseInt(ticketNumber, 10);
-          if (isNaN(num)) return ticketNumber; // Retorna original se não for número
-          return (num + 1).toString(); // Soma 1 e converte para string
-      } catch (e) {
-          return ticketNumber; // Retorna original em caso de erro
-      }
-  }
+    if (ticketNumber === null || ticketNumber === undefined || ticketNumber === '') return 'N/A'; // Tratar null/undefined/empty
+    try {
+        const num = parseInt(ticketNumber, 10);
+        if (isNaN(num)) return ticketNumber; // Retorna original se não for número
+        // Validar se está dentro do range esperado 0-99
+         if (num < 0 || num > 99) return ticketNumber; // Retorna original se fora do range 0-99
+
+        return (num + 1).toString(); // Soma 1 e converte para string
+    } catch (e: any) {
+        this.logger.error(`Erro ao formatar número de bilhete "${ticketNumber}": ${e.message}`);
+        return ticketNumber; // Retorna original em caso de erro
+    }
+}
 
   async getAllFixedAndExtraRaffles(): Promise<any> {
     // ... (lógica existente)
@@ -276,27 +466,30 @@ export class RaffleService {
       throw new NotFoundException('Nenhuma hash de blockchain encontrada.');
     }
 
+    // Busca a seed e o generatedNumber MAIS RECENTE associado à hash
     const correspondingSeed = await this.seedModel.findOne({
-      where: { hashId: latestHash.id },
-      include: [
-        {
-          model: GeneratedNumber,
-          order: [['createdAt', 'DESC']],
-          limit: 1,
-        },
-      ],
-      order: [['createdAt', 'DESC']],
+        where: { hashId: latestHash.id },
+        include: [
+            {
+                model: GeneratedNumber,
+                 // Busca o número que AINDA NÃO FOI USADO (isUsed = false)
+                where: { isUsed: false },
+                order: [['createdAt', 'ASC']], // Pega o mais antigo NÃO usado
+                limit: 1,
+            },
+        ],
+        order: [['createdAt', 'DESC']], // Pega a seed mais recente primeiro
     });
 
     if (!correspondingSeed || correspondingSeed.generatedNumbers.length === 0) {
       // Tentar gerar número se não existir? Por agora, lança erro.
       throw new NotFoundException(
-        `Nenhuma seed ou generatedNumber correspondente encontrado para a hash ${latestHash.id}. Execute a geração de números.`,
+        `Nenhuma seed ou generatedNumber NÃO USADO correspondente encontrado para a hash ${latestHash.id}. Execute a geração de números.`
       );
     }
 
-    const latestGeneratedNumber = correspondingSeed.generatedNumbers[0];
-    const lastTwoDigits = BigInt(latestGeneratedNumber.number) % 100n; // 0 a 99
+    const generatedNumberToUse = correspondingSeed.generatedNumbers[0];
+    const lastTwoDigits = BigInt(generatedNumberToUse.number) % 100n; // 0 a 99
     const winningTicketNumber = lastTwoDigits.toString().padStart(2, '0'); // Formato '00' a '99'
 
     const startDate = new Date();
@@ -306,10 +499,10 @@ export class RaffleService {
     endDate.setDate(startDate.getDate() + 7); // Adiciona 7 dias
 
     const newRaffle = await this.raffleModel.create({
-      raffleIdentifier: `RIFA-${Date.now()}`,
+      raffleIdentifier: `RJ-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`, // ID mais único e curto
       type: 'tradicional', // Definindo o tipo
-      title: `Rifa Tradicional - R$ ${ticketPrice.toFixed(2)}`,
-      description: `Rifa gerada automaticamente com base na hash ${latestHash.hash}. Prêmio: 70% do total.`,
+      title: `Rifa Tradicional - Loto Jack - R$ ${ticketPrice.toFixed(2)}`, // Nome Fantasia
+      description: `Rifa Loto Jack gerada automaticamente. Prêmio: 85% do total arrecadado para o bilhete sorteado, com 5% desse valor destinado ao indicador do ganhador APENAS se o indicador estiver ativo no mês. 15% para a Casa (inclui comissões não creditadas). Baseado na hash ${latestHash.hash}.`,
       ticketPrice: ticketPrice,
       totalTickets: 100, // 00 a 99
       soldTickets: 0,
@@ -320,14 +513,20 @@ export class RaffleService {
       drawDate: null, // Será preenchido na finalização
     });
 
-    // Associa o número gerado à rifa
+    // Associa o número gerado à rifa E MARCA COMO USADO
+     await this.generatedNumberModel.update(
+         { isUsed: true },
+         { where: { id: generatedNumberToUse.id } }
+     );
+
     await this.raffleNumberModel.create({
       raffleId: newRaffle.id,
-      numberId: latestGeneratedNumber.id,
+      numberId: generatedNumberToUse.id,
     });
 
+
     this.logger.log(
-      `Rifa Tradicional ${newRaffle.raffleIdentifier} criada. Preço: R$ ${ticketPrice.toFixed(2)}. Bilhete Sorteado (interno): ${winningTicketNumber}. Finaliza em: ${endDate.toISOString()}`,
+      `Rifa Tradicional ${newRaffle.raffleIdentifier} (ID ${newRaffle.id}) criada usando GeneratedNumber ID ${generatedNumberToUse.id}. Preço: R$ ${ticketPrice.toFixed(2)}. Bilhete Sorteado (interno): ${winningTicketNumber}. Finaliza em: ${endDate.toISOString()}`
     );
 
     return newRaffle;
@@ -380,8 +579,8 @@ export class RaffleService {
     // Start transaction
     const transaction = await this.sequelize.transaction();
     try {
-      // Fetch user within transaction
-      const user = await this.userModel.findByPk(userId, { transaction });
+      // Fetch user within transaction - Lock the user row during balance update later
+      const user = await this.userModel.findByPk(userId, { transaction, lock: transaction.LOCK.UPDATE }); // Lock the user!
       if (!user) {
         // No rollback needed here, transaction just started, no lock acquired yet
         throw new NotFoundException('Usuário não encontrado.');
@@ -410,7 +609,7 @@ export class RaffleService {
       }
 
       // Step 2: Fetch existing ticket numbers separately *within the same transaction*
-      // This does NOT need a lock, as the raffle row itself is locked.
+      // This does NOT need a lock on tickets themselves, as the raffle row itself is locked.
       const existingTicketsData = await this.raffleTicketModel.findAll({
           where: { raffleId: raffle.id },
           attributes: ['ticketNumber'], // Only need the numbers
@@ -506,11 +705,10 @@ export class RaffleService {
         { transaction }, // Use the transaction
       );
 
-      // Update user's balance
-      await user.update(
-        { balance: user.balance - totalCost },
-        { transaction }, // Use the transaction
-      );
+      // Update user's balance using the transactional method
+      // The user model instance 'user' was fetched WITH the transaction/lock
+      await this.authService.updateUserBalance(user.id, -totalCost, transaction);
+
 
       // Update the raffle's sold tickets count accurately
       const newSoldCount = existingTicketNumbers.size + quantity;
@@ -547,9 +745,9 @@ export class RaffleService {
     } catch (error) {
       // --- Error Handling & Rollback ---
       // Attempt to rollback the transaction if an error occurred and it's still active
-      if (transaction && typeof transaction.rollback === 'function') { // Check if it's a valid transaction object
+      // Check if transaction exists AND is not completed ('commit' or 'rollback')
+      if (transaction && (transaction as any).finished === null) { // Use (transaction as any).finished
             try {
-                // Sequelize's rollback should handle not rolling back already committed/rolled back transactions
                 await transaction.rollback();
                 this.logger.warn(`Rollback executado para transação de compra da rifa ${raffleId} por usuário ${userId} devido a erro no catch.`);
             } catch (rollbackError: any) {
@@ -565,6 +763,12 @@ export class RaffleService {
       if (error instanceof NotFoundException || error instanceof BadRequestException) {
         throw error;
       }
+
+       // Handle the specific balance error from updateUserBalance gracefully
+       if (error instanceof Error && error.message?.includes('Insufficient balance during transaction')) { // Match the error message from AuthService
+            throw new BadRequestException('Saldo insuficiente para concluir a compra.');
+       }
+
 
       // Log the captured error for debugging
       this.logger.error(
@@ -636,8 +840,10 @@ export class RaffleService {
 
     const raffles = await this.raffleModel.findAll({
       include: [
-        { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'email'] }] },
-        { model: User, as: 'winnerUser', attributes: ['id', 'name', 'email'] },
+        // Incluir os tickets com user E referrer para o calculatePrizeDetails (para rifas de equipes)
+        { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'email', 'referrerId'] }] },
+        // Incluir o winnerUser COM referrer para o calculatePrizeDetails (para rifas tradicionais e equipe)
+        { model: User, as: 'winnerUser', attributes: ['id', 'name', 'email', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
         { model: RaffleNumber, include: [ { model: GeneratedNumber, include: [ { model: Seed, include: [BlockchainHash] } ] } ] },
       ],
       where,
@@ -651,8 +857,10 @@ export class RaffleService {
   async getRaffleByIdWithDetails(raffleId: number): Promise<any> {
     const raffle = await this.raffleModel.findByPk(raffleId, {
       include: [
-        { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'email'] }] },
-        { model: User, as: 'winnerUser', attributes: ['id', 'name', 'email'] },
+         // Incluir os tickets com user E referrer para o calculatePrizeDetails (para rifas de equipes)
+        { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'email', 'referrerId'] }] },
+        // Incluir o winnerUser COM referrer para o calculatePrizeDetails (para rifas tradicionais e equipe)
+        { model: User, as: 'winnerUser', attributes: ['id', 'name', 'email', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
         { model: RaffleNumber, include: [ { model: GeneratedNumber, include: [ { model: Seed, include: [BlockchainHash] } ] } ] },
       ],
     });
@@ -667,30 +875,63 @@ export class RaffleService {
 
   // Função centralizada para formatar detalhes da rifa
   public formatRaffleDetails(raffle: Raffle): any {
+    // Ensure raffle has necessary relations loaded for calculatePrizeDetails and other formatting
+    // If this method is called with a raffle instance that doesn't have, e.g., `tickets` included,
+    // those parts will be empty, but the method structure supports it.
     const formattedTickets = this.formatRaffleTickets(raffle); // Formata os tickets 1-100
     const winningTicketInfo = this.formatWinningTicketInfo(raffle); // Formata info do bilhete vencedor 1-100
+    // Passar a instância 'raffle' diretamente para calculatePrizeDetails
     const prizeDetails = this.calculatePrizeDetails(raffle); // Calcula detalhes do prêmio
     const expectedDrawTime = this.calculateExpectedDrawTime(raffle); // Calcula horário esperado
 
-    let winningTeamDetails: { tickets: string[]; members: { tickets: string[] }[] } | null = null;
-    if (raffle.type === 'equipes' && raffle.finished && winningTicketInfo?.ticketNumber && prizeDetails?.winningTeamName) {
-        const formattedTeams = this.getFormattedTeams(raffle); // Pega times formatados
-        winningTeamDetails = formattedTeams[prizeDetails.winningTeamName] || null; // Acessa dados do time vencedor
-         if (winningTeamDetails) {
-            // Formata números dos tickets dentro dos detalhes da equipe vencedora
-            winningTeamDetails.tickets = winningTeamDetails.tickets.map(this.formatTicketNumberDisplay);
-            winningTeamDetails.members.forEach(member => {
-                member.tickets = member.tickets.map(this.formatTicketNumberDisplay);
-            });
-         }
+    let winningTeamDetails: { teamName: string; tickets: string[]; members: { id: number; name: string; tickets: string[] }[] } | null = null;
+    if (raffle.type === 'equipes' && raffle.finished && winningTicketInfo?.ticketNumber) { // prizeDetails?.winningTeamName já pode ser usado aqui
+        // getFormattedTeams precisa dos tickets com User e Referrer (assumindo que raffle já os incluiu)
+        const formattedTeams = this.getFormattedTeams(raffle); // Pega times formatados internos 00-99
+
+        // Mapeia a equipe vencedora para formatar seus tickets e membros para 1-100
+        const winningTeamName = this.getTeamNameByTicketNumber(raffle, raffle.winningTicket); // Usa o bilhete vencedor interno
+        const winningTeamInternalData = formattedTeams[winningTeamName]; // Dados internos da equipe vencedora
+
+        if (winningTeamInternalData) {
+             winningTeamDetails = {
+                 teamName: winningTeamName,
+                 tickets: winningTeamInternalData.tickets.map(this.formatTicketNumberDisplay), // Formata tickets do time para 1-100
+                 members: winningTeamInternalData.members.map(member => ({ // Formata tickets dos membros para 1-100
+                     id: member.id,
+                     name: member.name,
+                     tickets: member.tickets.map(this.formatTicketNumberDisplay),
+                 })),
+             };
+        } else {
+            winningTeamDetails = {
+                 teamName: winningTeamName ?? "N/A", // Fallback
+                 tickets: [], members: []
+            };
+        }
     }
+
+    // Se finalizado, tentar obter o indicador do ganhador principal para mostrar
+    let winnerReferrerInfo: { id: number; name: string; } | null = null; // Corrigida a tipagem
+     if (raffle.finished && raffle.winnerUser?.referrerId) {
+         winnerReferrerInfo = {
+             id: raffle.winnerUser.referrerId,
+             name: raffle.winnerUser.referrer?.name || 'Usuário Desconhecido', // Use o nome da relação se disponível
+         };
+     }
 
 
     return {
       id: raffle.id,
       raffleIdentifier: raffle.raffleIdentifier,
       type: raffle.type,
-      winner: raffle.winnerUser ? { id: raffle.winnerUser.id, name: raffle.winnerUser.name } : null,
+      // Incluir dados do vencedor, incluindo o indicador se houver
+      winner: raffle.winnerUser ? {
+           id: raffle.winnerUser.id,
+           name: raffle.winnerUser.name,
+           // email: raffle.winnerUser.email, // Opcional
+           referrer: winnerReferrerInfo, // Informação do indicador do vencedor
+      } : null,
       title: raffle.title,
       description: raffle.description,
       ticketPrice: raffle.ticketPrice, // Manter número
@@ -702,7 +943,7 @@ export class RaffleService {
       expectedDrawTime: expectedDrawTime, // Data/hora esperada
       finished: raffle.finished,
       winningTicket: winningTicketInfo, // Objeto com detalhes e número formatado 1-100
-      prizeDetails: prizeDetails, // Objeto com detalhes do prêmio
+      prizeDetails: prizeDetails, // Objeto com detalhes do prêmio (já inclui comissão)
       winningTeamDetails: winningTeamDetails, // Detalhes da equipe vencedora (para rifa de equipes)
       // tickets: formattedTickets, // Opcional: incluir lista completa de tickets aqui? Pode ser grande. Melhor endpoint separado.
       createdAt: raffle.createdAt,
@@ -741,6 +982,7 @@ export class RaffleService {
 
   // Função para formatar a lista de tickets (usada no novo endpoint e talvez internamente)
   public formatRaffleTickets(raffle: Raffle): any[] {
+    // getFormattedTeams precisa dos tickets com User e Referrer (assumindo que raffle já os incluiu)
     if (!raffle.tickets) {
       return [];
     }
@@ -770,6 +1012,7 @@ export class RaffleService {
           id: ticket.user.id,
           name: ticket.user.name,
           // email: ticket.user.email // Opcional: expor email?
+          // referrerId: ticket.user.referrerId // Opcional: expor referrerId no ticket?
         } : null,
         team: teamInfo, // Adiciona info da equipe se aplicável
         purchaseDate: ticket.createdAt, // Data da compra do bilhete
@@ -804,29 +1047,32 @@ export class RaffleService {
       return this.formatRaffleTickets(raffle);
   }
 
+  async finalizeRaffle(raffleId: number, transactionHost?: Transaction): Promise<Raffle> {
+    const transaction = transactionHost || await this.sequelize.transaction(); // Usa transação existente ou cria uma nova
+    let raffle; // Declare raffle outside try to ensure access in catch
 
-  async finalizeRaffle(raffleId: number, transactionHost?: any): Promise<Raffle> {
-    const transaction = transactionHost ? transactionHost : await this.sequelize.transaction();
     try {
-      // Step 1: Find and lock the Raffle row ONLY
-      const raffle = await this.raffleModel.findByPk(raffleId, {
-        transaction,
-        lock: transaction.LOCK.UPDATE,
-        // NO includes here for locking!
-      });
+      // Step 1: Find and lock the Raffle row
+      // Include winning ticket user with referrer info for prize distribution logic AND for reload/return value
+       raffle = await this.raffleModel.findByPk(raffleId, {
+         transaction,
+         lock: transaction.LOCK.UPDATE,
+         include: [{ model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] }],
+       });
+
 
       if (!raffle) {
-        throw new NotFoundException('Rifa não encontrada.');
+        if (!transactionHost) await transaction.rollback();
+        throw new NotFoundException('Rifa tradicional não encontrada.');
       }
       if (raffle.finished) {
-        this.logger.warn(`Tentativa de finalizar rifa ${raffleId} que já está finalizada.`);
-        if (!transactionHost) await transaction.commit(); // Commit if local transaction
-        // Fetch relations if needed for return value even if already finished
-         await raffle.reload({ include: [{ model: User, as: 'winnerUser' }, { model: RaffleTicket, include: [User]}] });
+        this.logger.warn(`Tentativa de finalizar rifa tradicional ${raffleId} que já está finalizada.`);
+        if (!transactionHost) await transaction.commit();
+        // Reload with necessary relations before returning (already included in the initial fetch)
+        // await raffle.reload({ ... }); // Not needed if already included
         return raffle;
       }
       if (raffle.type !== 'tradicional') {
-         // Rollback before throwing if local transaction
          if (!transactionHost) await transaction.rollback();
          throw new BadRequestException(`A Rifa ${raffleId} é do tipo ${raffle.type} e não pode ser finalizada por este método.`);
       }
@@ -836,40 +1082,86 @@ export class RaffleService {
       const isEndDateReached = raffle.endDate && raffle.endDate <= now;
 
       if (!isSoldOut && !isEndDateReached) {
-        // Rollback immediately if condition not met, as lock was acquired
         if (!transactionHost) await transaction.rollback();
         throw new BadRequestException(
-          `A rifa ${raffleId} ainda não pode ser finalizada. Bilhetes vendidos: ${raffle.soldTickets}/${raffle.totalTickets}. Data de fim: ${raffle.endDate?.toISOString() ?? 'N/A'}.`
+          `A rifa tradicional ${raffleId} ainda não pode ser finalizada. Bilhetes vendidos: ${raffle.soldTickets}/${raffle.totalTickets}. Data de fim: ${raffle.endDate?.toISOString() ?? 'N/A'}.`
         );
       }
 
       const winningTicketNumberInternal = raffle.winningTicket;
       if (!winningTicketNumberInternal) {
-           if (!transactionHost) await transaction.rollback(); // Rollback before throwing
-          throw new InternalServerErrorException(`Rifa ${raffleId} não possui um bilhete sorteado definido (winningTicket).`);
+           if (!transactionHost) await transaction.rollback();
+          throw new InternalServerErrorException(`Rifa tradicional ${raffleId} não possui um bilhete sorteado definido.`);
       }
       this.logger.log(`Finalizando Rifa Tradicional ${raffleId}. Bilhete Sorteado (interno): ${winningTicketNumberInternal}`);
 
-      // Step 2: Fetch associated tickets *within the same transaction*
-      const winningTicket = await this.raffleTicketModel.findOne({
-           where: { raffleId: raffle.id, ticketNumber: winningTicketNumberInternal },
-           include: [User], // Include the user who bought it
-           transaction // Use the same transaction
-       });
+      // Find the winning ticket from the already included tickets
+      const winningTicket = raffle.tickets?.find(t => t.ticketNumber === winningTicketNumberInternal);
 
       let winnerUserId: number | null = null;
-      let prizeAmount = 0;
+      let totalPrizeAmount = 0; // O pool total de prêmio para o ganhador (85% do coletado)
+      let mainWinnerReferrerActive = false; // Track referrer activity status
+
+      const totalCollectedValue = raffle.ticketPrice * raffle.soldTickets;
+      totalPrizeAmount = totalCollectedValue * 0.85; // 85% do valor REALMENTE coletado
 
       if (winningTicket && winningTicket.user) {
-        winnerUserId = winningTicket.userId;
-        const winnerUser = winningTicket.user; // Use the fetched user instance
+        const winnerUser = winningTicket.user; // User model fetched with referrerId
+        winnerUserId = winnerUser.id;
         this.logger.log(`Bilhete ${winningTicketNumberInternal} (usuário ${winnerUserId} - ${winnerUser.name}) é o vencedor.`);
-        prizeAmount = raffle.ticketPrice * raffle.totalTickets * 0.7;
-        // Increment on the fetched user instance
-        await winnerUser.increment('balance', { by: prizeAmount, transaction });
-        this.logger.log(`Prêmio de R$ ${prizeAmount.toFixed(2)} creditado ao usuário ${winnerUserId}.`);
+
+        let winnerNetPrize = totalPrizeAmount; // Assume que ganha tudo inicialmente (antes da comissão)
+        let referrerCommission = 0;
+
+        // Check if winner has a referrer and award commission
+        if (winnerUser.referrerId) {
+             this.logger.log(`Usuário ${winnerUserId} (ganhador) foi indicado por ${winnerUser.referrerId}.`);
+             const referrerUser = await this.authService.findReferrerById(winnerUser.id, transaction); // Buscar indicador na transação
+
+            if (referrerUser) {
+                // Check if the referrer played any game this month
+                mainWinnerReferrerActive = await this.authService.hasPlayedThisMonth(referrerUser.id, transaction);
+
+                if (mainWinnerReferrerActive) {
+                    // Calcular 5% do prêmio TOTAL (85%) para o indicador
+                    referrerCommission = totalPrizeAmount * 0.05;
+                    // O ganhador recebe os 95% restantes do prêmio TOTAL (85%)
+                    winnerNetPrize = totalPrizeAmount * 0.95;
+
+                    // Creditar comissão ao indicador
+                     this.logger.log(`Indicador ${referrerUser.id} está ativo. Creditando comissão de indicação de R$ ${referrerCommission.toFixed(2)}.`);
+                    await this.authService.updateUserBalance(referrerUser.id, referrerCommission, transaction);
+
+                } else {
+                     this.logger.log(`Indicador ${referrerUser.id} NÃO está ativo este mês. Comissão de R$ ${totalPrizeAmount * 0.05} NÃO creditada e vai para a Casa.`);
+                     // Comissão não é creditada ao indicador, fica implicitamente na Casa. Ganhador recebe o prêmio total.
+                     winnerNetPrize = totalPrizeAmount;
+                     referrerCommission = 0; // Comissão não creditada é 0
+                }
+
+            } else {
+                 this.logger.warn(`Indicador (ID ${winnerUser.referrerId}) do usuário ganhador ${winnerUserId} não encontrado. Comissão não aplicável/creditada.`);
+                 // Se o indicador não for encontrado, o ganhador recebe o prêmio total
+                 winnerNetPrize = totalPrizeAmount;
+                 referrerCommission = 0;
+                 mainWinnerReferrerActive = false; // Não há indicador válido
+            }
+        } else {
+             this.logger.log(`Usuário ${winnerUserId} (ganhador) não foi indicado. Sem comissão para indicador.`);
+             // Ganhador não tem indicador
+             winnerNetPrize = totalPrizeAmount;
+             referrerCommission = 0;
+             mainWinnerReferrerActive = false; // Não há indicador
+        }
+
+        // Creditar prêmio líquido ao ganhador
+         this.logger.log(`Creditando prêmio líquido de R$ ${winnerNetPrize.toFixed(2)} para o ganhador ${winnerUserId}.`);
+        await this.authService.updateUserBalance(winnerUser.id, winnerNetPrize, transaction);
+
       } else {
-        this.logger.log(`Nenhum bilhete vendido corresponde ao número sorteado ${winningTicketNumberInternal}. Prêmio não distribuído.`);
+        this.logger.log(`Nenhum bilhete vendido corresponde ao número sorteado ${winningTicketNumberInternal}. Prêmio (R$ ${totalPrizeAmount.toFixed(2)}) não distribuído aos jogadores/indicadores.`);
+        winnerUserId = null; // Explicitamente nulo se ninguém comprou o bilhete
+        mainWinnerReferrerActive = false; // Ninguém ganhou, sem indicador ativo relevante
       }
 
       // Step 3: Update the raffle status
@@ -884,27 +1176,51 @@ export class RaffleService {
 
       this.logger.log(`Rifa Tradicional ${raffleId} finalizada com sucesso.`);
 
-      // Step 5: Reload to get updated relations for the return value
-      // Reload outside the lock/transaction logic is safer here
-      await raffle.reload({ include: [{ model: User, as: 'winnerUser' }] }); // Reload with winner user
+      // Step 5: Reload to get updated relations and attach details for formatRaffleDetails
+      // Need winnerUser with referrer and tickets with users+referrer for formatRaffleDetails
+       await raffle.reload({
+            include: [
+                { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
+                { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'] }] }
+            ],
+            transaction // Use transaction for reload if it's still active (though likely committed here)
+        });
+        // Attach the calculated active status for formatRaffleDetails
+        (raffle as any).mainWinnerReferrerActive = mainWinnerReferrerActive;
+
+
       return raffle;
 
     } catch (error) {
        // Ensure rollback if transaction was local and error occurred
-       if (!transactionHost && transaction && !transaction.finished) {
+       // Check if transaction exists AND is not completed ('commit' or 'rollback')
+       if (!transactionHost && transaction && (transaction as any).finished === null) { // Use (transaction as any).finished
             try {
                 await transaction.rollback();
-                this.logger.warn(`Rollback executado para transação da rifa ${raffleId} devido a erro.`);
-            } catch (rollbackError) {
-                this.logger.error(`Erro ao tentar executar rollback para rifa ${raffleId}: ${rollbackError}`);
+                this.logger.warn(`Rollback executado para transação da rifa tradicional ${raffleId} devido a erro.`);
+            } catch (rollbackError: any) {
+                 if (!rollbackError.message?.includes('already')) {
+                    this.logger.error(`Erro ao tentar executar rollback no CATCH para rifa tradicional ${raffleId}: ${rollbackError}`);
+                 }
             }
        }
       // Re-throw specific errors or log and throw generic
       if (error instanceof NotFoundException || error instanceof BadRequestException || error instanceof ConflictException || error instanceof InternalServerErrorException) {
         throw error;
       }
-      this.logger.error(`Erro ao finalizar a rifa tradicional ${raffleId}: ${(error as any).message}`, (error as any).stack);
-      throw new InternalServerErrorException('Erro interno ao finalizar a rifa.');
+       // Re-throw specific error from updateUserBalance
+       if (error instanceof Error && ((error as any).isHandled)) { // Check for the .isHandled flag
+           this.logger.error(`Erro esperado durante finalização da rifa ${raffleId}: ${error.message}`);
+           // Converter para InternalServerError se não for um BadRequest que já foi lançado
+           if (!(error instanceof BadRequestException)) {
+                 throw new InternalServerErrorException(`Erro na operação de saldo durante a finalização da rifa ${raffleId}: ${error.message}`);
+           }
+            throw error; // Re-throw BadRequest
+       }
+
+
+      this.logger.error(`Erro inesperado ao finalizar a rifa tradicional ${raffleId}: ${(error as any).message}`, (error as any).stack);
+      throw new InternalServerErrorException('Erro interno ao finalizar a rifa tradicional.');
     }
   }
 
@@ -917,16 +1233,21 @@ export class RaffleService {
       const now = new Date();
       this.logger.log(`CRON [${now.toISOString()}]: Verificando rifas para finalizar...`);
 
+      // Buscar rifas que estão prontas para finalizar (esgotadas ou data de fim atingida)
+      // e que AINDA NÃO ESTÃO FINALIZADAS.
       const rafflesToFinalize = await this.raffleModel.findAll({
           where: {
               finished: false,
               [Op.or]: [
-                  { soldTickets: { [Op.gte]: Sequelize.col('totalTickets') } }, // Esgotadas
-                  { endDate: { [Op.lte]: now } } // Data de fim atingida
+                  { soldTickets: { [Op.gte]: Sequelize.col('totalTickets') } }, // Esgotadas (vendidos >= total)
+                  { endDate: { [Op.lte]: now } } // Data de fim atingida (fim <= agora)
               ]
           },
-           lock: true, // Tenta bloquear as linhas encontradas
-           skipLocked: true // Pula as que já estão bloqueadas por outra instância/processo
+           // Não usar lock aqui na busca inicial, pois a finalização individual terá sua própria transação e lock
+           // lock: true, // Tenta bloquear as linhas encontradas
+           // skipLocked: true // Pula as que já estão bloqueadas por outra instância/processo
+           // Ordering might help process oldest first or newest first
+           order: [['endDate', 'ASC'], ['createdAt', 'ASC']] // Prioriza as que venceram primeiro, depois as mais antigas
       });
 
       if (rafflesToFinalize.length === 0) {
@@ -936,26 +1257,26 @@ export class RaffleService {
 
       this.logger.log(`CRON: Encontradas ${rafflesToFinalize.length} rifas para processar finalização.`);
 
+      // Processar cada rifa individualmente em sua própria transação
       for (const raffle of rafflesToFinalize) {
-          const transaction = await this.sequelize.transaction(); // Transação por rifa
-          this.logger.log(`CRON: Processando Rifa ID: ${raffle.id}, Tipo: ${raffle.type}, Vendidos: ${raffle.soldTickets}/${raffle.totalTickets}, EndDate: ${raffle.endDate?.toISOString()}`);
+          this.logger.log(`CRON: Iniciando processamento para Rifa ID: ${raffle.id}, Tipo: ${raffle.type}, Vendidos: ${raffle.soldTickets}/${raffle.totalTickets}, EndDate: ${raffle.endDate?.toISOString()}`);
+          // A finalização da rifa já gerencia sua própria transação e lock
           try {
               if (raffle.type === 'tradicional') {
-                  await this.finalizeRaffle(raffle.id, transaction); // Passa a transação
+                  // Passa undefined para transactionHost, indicando que o método deve criar a sua
+                  await this.finalizeRaffle(raffle.id, undefined);
               } else if (raffle.type === 'equipes') {
-                  await this.finalizeTeamRaffle(raffle.id, transaction); // Passa a transação
+                   // Passa undefined para transactionHost, indicando que o método deve criar a sua
+                  await this.finalizeTeamRaffle(raffle.id, undefined);
               }
-              await transaction.commit();
               this.logger.log(`CRON: Rifa ${raffle.id} finalizada com sucesso.`);
           } catch (error) {
-              await transaction.rollback();
-              // Não lançar erro aqui para não parar o cron, apenas logar
+              // Captura erros individuais para não parar o cron job inteiro
               this.logger.error(`CRON: Erro ao finalizar rifa ${raffle.id}: ${(error as any).message}`);
-              // Se o erro for BadRequest (ex: ainda não pode finalizar), pode ser normal
-              if (!(error instanceof BadRequestException)) {
-                 // Logar stack para outros tipos de erro
-                 this.logger.error(`CRON: Stacktrace: ${(error as any).stack}`);
-              }
+               // Logar stack para erros inesperados
+               if (!(error instanceof BadRequestException || error instanceof NotFoundException || ((error as any).isHandled))) { // Não logar stack para erros "tratados" como saldo insuficiente ou usuário não encontrado em transação
+                   this.logger.error(`CRON: Stacktrace para Rifa ${raffle.id}: ${(error as any).stack}`);
+               }
           }
       }
       this.logger.log('CRON: Processamento de finalização de rifas concluído.');
@@ -995,121 +1316,208 @@ export class RaffleService {
 
 
   async getRafflesPlayedByUser(userId: number): Promise<any[]> { // Alterado retorno para any[]
+    // Buscar as rifas onde o usuário comprou pelo menos um ticket
     const raffles = await this.raffleModel.findAll({
-        include: [
-            { model: RaffleTicket, where: { userId: userId }, required: true, include: [User] }, // Inclui User aqui se precisar
-            { model: User, as: 'winnerUser', attributes: ['id', 'name'] },
-            { model: RaffleNumber, include: [{ model: GeneratedNumber, include: [{ model: Seed, include: [BlockchainHash] }] }] },
-        ],
-        order: [['createdAt', 'DESC']],
-    });
-    // Formata cada rifa usando a função detalhada
-    return raffles.map(raffle => this.formatRaffleDetails(raffle));
-  }
-
-  async getWonRafflesByUser(userId: number): Promise<any[]> { // Alterado retorno para any[]
-    const raffles = await this.raffleModel.findAll({
-      where: {
-        winnerUserId: userId,
-        finished: true,
-      },
-      include: [
-          // Incluir tickets do usuário para contexto, mas não é estritamente necessário para filtro
-          { model: RaffleTicket, where: { userId: userId }, required: true, include: [User]},
-          { model: User, as: 'winnerUser', attributes: ['id', 'name'] }, // Já filtrado por winnerUserId, mas inclui para dados
-          { model: RaffleNumber, include: [{ model: GeneratedNumber, include: [{ model: Seed, include: [BlockchainHash] }] }] },
-      ],
-      order: [['drawDate', 'DESC']], // Ordenar pelas mais recentes ganhas
-    });
-     // Formata cada rifa usando a função detalhada
-     return raffles.map(raffle => this.formatRaffleDetails(raffle));
-  }
-
-  async getLostRafflesByUser(userId: number): Promise<any[]> { // Alterado retorno para any[]
-    const raffles = await this.raffleModel.findAll({
-      where: {
-        finished: true,
-        winnerUserId: { [Op.ne]: userId }, // Onde o vencedor NÃO é o usuário
-        [Op.and]: [ // Garante que o usuário participou
-            Sequelize.literal(`EXISTS (SELECT 1 FROM raffle_tickets rt WHERE rt."raffleId" = "Raffle"."id" AND rt."userId" = ${userId})`)
-        ]
-      },
-      include: [
-          // Incluir winnerUser para saber quem ganhou
-          { model: User, as: 'winnerUser', attributes: ['id', 'name'] },
-          { model: RaffleNumber, include: [{ model: GeneratedNumber, include: [{ model: Seed, include: [BlockchainHash] }] }] },
-          // Opcional: incluir os tickets do usuário para mostrar quais ele tinha
-          { model: RaffleTicket, as: 'tickets', required: false, include: [User] } // Traz todos os tickets, filtrar no format se necessário
-      ],
-      order: [['drawDate', 'DESC']], // Ordenar pelas mais recentes perdidas
-    });
-     // Formata cada rifa usando a função detalhada
-     return raffles.map(raffle => this.formatRaffleDetails(raffle));
-  }
-
-  async getUserRaffleData(userId: number): Promise<any> {
-    const user = await this.userModel.findByPk(userId, {
-      attributes: ['id', 'name', 'email', 'cpf', 'phone', 'balance'], // Dados do usuário
-    });
-
-    if (!user) {
-      throw new NotFoundException('Usuário não encontrado.');
-    }
-
-    // Busca todas as rifas que o usuário participou
-    const playedRaffles = await this.raffleModel.findAll({
         include: [
             {
                 model: RaffleTicket,
-                as: 'tickets',
-                where: { userId: userId }, // Filtra pelos tickets DO usuário
-                required: true, // Garante que só venham rifas que ele jogou
-                include: [{ model: User }] // Usuário do ticket (será ele mesmo)
+                as: 'tickets', // Precisa incluir TODOS os tickets para a rifa de equipe e calculatePrizeDetails
+                // Sem 'where' nesta inclusão para ter todos os tickets da rifa
+                required: true, // Garante que só venham rifas que o usuário jogou (pelo filtro abaixo)
+                 // Incluir User e Referrer para poder usar formatRaffleDetails e calculatePrizeDetails
+                include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] // Incluir Referrer aqui
             },
-            { model: User, as: 'winnerUser', attributes: ['id', 'name'] }, // Quem ganhou a rifa
+            // Incluir winnerUser e Referrer para formatRaffleDetails
+            { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
+             // Incluir RaffleNumber, GeneratedNumber, Seed, BlockchainHash para formatWinningTicketInfo
             { model: RaffleNumber, include: [{ model: GeneratedNumber, include: [{ model: Seed, include: [BlockchainHash] }] }] },
             { model: User, as: 'createdByUser', attributes: ['id', 'name']} // Quem criou (se aplicável)
         ],
+        where: Sequelize.literal(`EXISTS (SELECT 1 FROM raffle_tickets rt WHERE rt."raffleId" = "Raffle"."id" AND rt."userId" = ${userId})`), // Filtra no WHERE principal
         order: [['createdAt', 'DESC']] // Ordena as rifas
     });
 
     // Mapeia e formata os detalhes de cada rifa jogada
-    const formattedPlayedRaffles = playedRaffles.map(raffle => {
+    return raffles.map(raffle => {
          const details = this.formatRaffleDetails(raffle);
          // Adiciona os tickets específicos do usuário a esta rifa formatada
          details.userTickets = this.formatRaffleTickets(raffle) // Formata TODOS os tickets da rifa
                                .filter(ticket => ticket.user?.id === userId); // Filtra apenas os do usuário logado
          return details;
      });
-
-    return {
-      userData: {
-            userId: user.id,
-            name: user.name,
-            email: user.email,
-            cpf: user.cpf,
-            phone: user.phone,
-            balance: user.balance,
-      },
-      playedRaffles: formattedPlayedRaffles, // Lista de rifas jogadas formatadas
-    };
   }
 
-  async createTeamRaffle(ticketPrice: number): Promise<Raffle> {
+  async getWonRafflesByUser(userId: number): Promise<any[]> { // Alterado retorno para any[]
+    // Buscar *todas* as rifas finalizadas onde o usuário participou
+       const raffles = await this.raffleModel.findAll({
+           where: {
+               finished: true, // Apenas rifas finalizadas
+                [Op.and]: [ // Garante que o usuário participou
+                    Sequelize.literal(`EXISTS (SELECT 1 FROM raffle_tickets rt WHERE rt."raffleId" = "Raffle"."id" AND rt."userId" = ${userId})`)
+                ]
+           },
+           include: [
+               // Incluir TODOS os tickets da rifa com User e Referrer, necessário para determinar ganhadores da equipe e filtrar quem GANHOU
+                { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'] }] },
+               // Incluir winnerUser e Referrer para formatRaffleDetails
+               { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
+               // Incluir RaffleNumber, GeneratedNumber, Seed, BlockchainHash para formatWinningTicketInfo
+               { model: RaffleNumber, include: [{ model: GeneratedNumber, include: [{ model: Seed, include: [BlockchainHash] }] }] },
+           ],
+           order: [['drawDate', 'DESC']], // Ordenar pelas mais recentes ganhas/finalizadas
+       });
+
+     // Agora, filtrar as rifas onde o usuário *realmente* ganhou
+     const wonRaffles = raffles.filter(raffle => {
+         if (raffle.winnerUserId === userId) {
+             return true; // Ele ganhou o prêmio principal
+         }
+         if (raffle.type === 'equipes' && raffle.finished) {
+             // Verificar se ele estava na equipe vencedora E comprou um bilhete nela (e não era o ganhador principal, já tratado acima)
+             const winningTicketNumberInternal = raffle.winningTicket;
+              if (!winningTicketNumberInternal) return false; // Não tem bilhete vencedor definido
+
+             const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningTicketNumberInternal);
+
+             if (winningTeamName && winningTeamName !== 'N/A' && winningTeamName !== 'Inválido' && winningTeamName !== 'Erro') {
+                 // Buscar tickets do usuário nesta rifa
+                 const userTicketsInThisRaffle = raffle.tickets?.filter(ticket => ticket.userId === userId) || [];
+
+                 // Verificar se algum ticket do usuário pertence à equipe vencedora
+                 return userTicketsInThisRaffle.some(ticket =>
+                     this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber) === winningTeamName &&
+                     ticket.userId !== raffle.winnerUserId // Garante que não é o ganhador principal
+                 );
+             }
+         }
+         return false; // Não ganhou nesta rifa
+     });
+
+     // Formata cada rifa ganha usando a função detalhada
+     return wonRaffles.map(raffle => this.formatRaffleDetails(raffle));
+  }
+  async getLostRafflesByUser(userId: number): Promise<any[]> { // Alterado retorno para any[]
+    // Buscar *todas* as rifas finalizadas onde o usuário participou
+     const raffles = await this.raffleModel.findAll({
+         where: {
+             finished: true, // Apenas rifas finalizadas
+              [Op.and]: [ // Garante que o usuário participou
+                  Sequelize.literal(`EXISTS (SELECT 1 FROM raffle_tickets rt WHERE rt."raffleId" = "Raffle"."id" AND rt."userId" = ${userId})`)
+              ]
+         },
+         include: [
+             // Incluir TODOS os tickets da rifa com User e Referrer, necessário para determinar ganhadores da equipe e filtrar quem PERDEU
+              { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'] }] },
+             // Incluir winnerUser e Referrer para formatRaffleDetails
+             { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
+             // Incluir RaffleNumber, GeneratedNumber, Seed, BlockchainHash para formatWinningTicketInfo
+             { model: RaffleNumber, include: [{ model: GeneratedNumber, include: [{ model: Seed, include: [BlockchainHash] }] }] },
+         ],
+         order: [['drawDate', 'DESC']], // Ordenar pelas mais recentes perdidas/finalizadas
+     });
+
+      // Agora, filtrar as rifas onde o usuário *realmente* PERDEU
+     const lostRaffles = raffles.filter(raffle => {
+         // Ele perdeu se ele participou (já garantido pelo WHERE) E ele NÃO ganhou
+         // A lógica de "ele não ganhou" é o oposto da lógica em getWonRafflesByUser
+
+         if (raffle.winnerUserId === userId) {
+             return false; // Ele ganhou o prêmio principal, então não perdeu
+         }
+          if (raffle.type === 'equipes' && raffle.finished) {
+              // Verificar se ele estava na equipe vencedora E comprou um bilhete nela (e não era o ganhador principal)
+              const winningTicketNumberInternal = raffle.winningTicket;
+               if (!winningTicketNumberInternal) return true; // Se não tem bilhete vencedor, ninguém ganhou (ele perdeu)
+
+              const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningTicketNumberInternal);
+
+               if (winningTeamName && winningTeamName !== 'N/A' && winningTeamName !== 'Inválido' && winningTeamName !== 'Erro') {
+                  // Buscar tickets do usuário nesta rifa
+                  const userTicketsInThisRaffle = raffle.tickets?.filter(ticket => ticket.userId === userId) || [];
+
+                  // Verificar se algum ticket do usuário pertence à equipe vencedora (excluindo o ganhador principal)
+                  const wonTeamPrize = userTicketsInThisRaffle.some(ticket =>
+                      this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber) === winningTeamName &&
+                      ticket.userId !== raffle.winnerUserId // Garante que não é o ganhador principal
+                  );
+
+                  if (wonTeamPrize) {
+                       return false; // Ele ganhou prêmio na equipe, então não perdeu totalmente
+                  }
+               }
+          }
+         // Se não ganhou prêmio principal E não ganhou prêmio na equipe, então perdeu
+         return true;
+     });
+
+    // Formata cada rifa perdida usando a função detalhada
+    return lostRaffles.map(raffle => this.formatRaffleDetails(raffle));
+}
+
+async getUserRaffleData(userId: number): Promise<any> {
+  const user = await this.userModel.findByPk(userId, {
+    attributes: ['id', 'name', 'email', 'cpf', 'phone', 'balance'], // Dados do usuário
+  });
+
+  if (!user) {
+    throw new NotFoundException('Usuário não encontrado.');
+  }
+
+  // Busca todas as rifas que o usuário participou
+  const playedRaffles = await this.raffleModel.findAll({
+      include: [
+          {
+              model: RaffleTicket,
+              as: 'tickets', // Incluir TODOS os tickets para a lógica de equipe e detalhes do prêmio
+              // Sem 'where' nesta inclusão para ter todos os tickets da rifa
+              required: true, // Garante que só venham rifas que ele jogou (pelo filtro abaixo)
+              // Incluir User e Referrer para poder usar formatRaffleDetails e calculatePrizeDetails
+              include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] // Incluir Referrer aqui
+          },
+          // Incluir winnerUser e Referrer para formatRaffleDetails
+          { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
+           // Incluir RaffleNumber, GeneratedNumber, Seed, BlockchainHash para formatWinningTicketInfo
+          { model: RaffleNumber, include: [{ model: GeneratedNumber, include: [{ model: Seed, include: [BlockchainHash] }] }] },
+          { model: User, as: 'createdByUser', attributes: ['id', 'name']} // Quem criou (se aplicável)
+      ],
+      where: Sequelize.literal(`EXISTS (SELECT 1 FROM raffle_tickets rt WHERE rt."raffleId" = "Raffle"."id" AND rt."userId" = ${userId})`), // Filtra no WHERE principal
+      order: [['createdAt', 'DESC']] // Ordena as rifas
+  });
+
+  // Mapeia e formata os detalhes de cada rifa jogada
+  return Raffle.map(raffle => {
+       const details = this.formatRaffleDetails(raffle);
+       // Adiciona os tickets específicos do usuário a esta rifa formatada
+       details.userTickets = this.formatRaffleTickets(raffle) // Formata TODOS os tickets da rifa
+                             .filter(ticket => ticket.user?.id === userId); // Filtra apenas os do usuário logado
+       return details;
+   });
+}
+
+async createTeamRaffle(ticketPrice: number): Promise<Raffle> {
     const latestHash = await this.blockchainHashModel.findOne({ order: [['timestamp', 'DESC']] });
     if (!latestHash) throw new NotFoundException('Nenhuma hash de blockchain encontrada.');
 
+    // Busca a seed e o generatedNumber MAIS RECENTE associado à hash
     const correspondingSeed = await this.seedModel.findOne({
         where: { hashId: latestHash.id },
-        include: [{ model: GeneratedNumber, order: [['createdAt', 'DESC']], limit: 1 }],
+        include: [
+            {
+                model: GeneratedNumber,
+                // Busca o número que AINDA NÃO FOI USADO (isUsed = false)
+                 where: { isUsed: false },
+                 order: [['createdAt', 'ASC']], // Pega o mais antigo NÃO usado
+                 limit: 1,
+            },
+        ],
         order: [['createdAt', 'DESC']],
     });
     if (!correspondingSeed || correspondingSeed.generatedNumbers.length === 0) {
-        throw new NotFoundException(`Nenhuma seed/generatedNumber encontrado para a hash ${latestHash.id}. Execute a geração de números.`);
+        throw new NotFoundException(`Nenhuma seed/generatedNumber NÃO USADO encontrado para a hash ${latestHash.id}. Execute a geração de números.`);
     }
 
-    const latestGeneratedNumber = correspondingSeed.generatedNumbers[0];
-    const lastTwoDigits = BigInt(latestGeneratedNumber.number) % 100n;
+    const generatedNumberToUse = correspondingSeed.generatedNumbers[0];
+    const lastTwoDigits = BigInt(generatedNumberToUse.number) % 100n;
     const winningTicketNumber = lastTwoDigits.toString().padStart(2, '0'); // 00-99
 
     const startDate = new Date();
@@ -1117,10 +1525,10 @@ export class RaffleService {
     endDate.setDate(startDate.getDate() + 7); // 7 dias para finalizar, por exemplo
 
     const newRaffle = await this.raffleModel.create({
-        raffleIdentifier: `RIFA-EQUIPES-${Date.now()}`,
+        raffleIdentifier: `RL-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`, // ID mais único e curto (RL = Rifa Loto Seleções)
         type: 'equipes', // Define o tipo
-        title: `Rifa de Equipes - R$ ${ticketPrice.toFixed(2)}`,
-        description: `Rifa de equipes gerada automaticamente. Prêmio: 50% (bilhete exato) + 30% (outros membros da equipe). Hash: ${latestHash.hash}`,
+        title: `Rifa de Equipes - Loto Seleções - R$ ${ticketPrice.toFixed(2)}`, // Nome Fantasia
+        description: `Rifa Loto Seleções gerada automaticamente. Prêmio: 50% do total arrecadado para o bilhete exato sorteado, 30% para os membros da equipe do bilhete sorteado. Comissão de 5% do prêmio ganho para o indicador de CADA ganhador APENAS se o indicador estiver ativo no mês. 20% para a Casa (inclui comissões não creditadas). Baseado na hash ${latestHash.hash}`,
         ticketPrice: ticketPrice,
         totalTickets: 100, // 00-99
         soldTickets: 0,
@@ -1131,13 +1539,19 @@ export class RaffleService {
         drawDate: null,
     });
 
+     // Associa o número gerado à rifa E MARCA COMO USADO
+     await this.generatedNumberModel.update(
+         { isUsed: true },
+         { where: { id: generatedNumberToUse.id } }
+     );
+
     await this.raffleNumberModel.create({
         raffleId: newRaffle.id,
-        numberId: latestGeneratedNumber.id,
+        numberId: generatedNumberToUse.id,
     });
 
     this.logger.log(
-        `Rifa de Equipes ${newRaffle.raffleIdentifier} criada. Preço: R$ ${ticketPrice.toFixed(2)}. Bilhete Sorteado (interno): ${winningTicketNumber}. Finaliza em: ${endDate.toISOString()}`
+        `Rifa de Equipes ${newRaffle.raffleIdentifier} (ID ${newRaffle.id}) criada usando GeneratedNumber ID ${generatedNumberToUse.id}. Preço: R$ ${ticketPrice.toFixed(2)}. Bilhete Sorteado (interno): ${winningTicketNumber}. Finaliza em: ${endDate.toISOString()}`
     );
     return newRaffle;
   }
@@ -1157,14 +1571,15 @@ export class RaffleService {
   }
 
   private getFormattedTeams(raffle: Raffle): any {
-    if (raffle.type !== 'equipes') return {}; // Retorna objeto vazio se não for de equipes
+    if (raffle.type !== 'equipes' || !raffle.tickets) return {}; // Retorna objeto vazio se não for de equipes ou não tiver tickets
 
     const totalTickets = raffle.totalTickets; // Geralmente 100
     const ticketsPerTeam = 4; // Fixo em 4
     const totalTeams = Math.min(this.teamNames.length, Math.floor(totalTickets / ticketsPerTeam)); // Usa o menor entre nomes disponíveis e times possíveis
-    const teams = {};
+    const teams: { [key: string]: { teamName: string; tickets: string[]; members: { id: number; name: string; tickets: string[] }[] } } = {}; // Tipagem mais clara
 
-    const ticketsMap = new Map(raffle.tickets?.map(t => [t.ticketNumber, t]) || []); // Mapa para busca rápida de tickets comprados
+    // Indexa os tickets comprados por número interno
+    const ticketsMap = new Map<string, RaffleTicket>(raffle.tickets.map(t => [t.ticketNumber, t]));
 
     for (let i = 0; i < totalTeams; i++) {
       const teamName = this.teamNames[i];
@@ -1210,160 +1625,287 @@ export class RaffleService {
         // this.logger.log('CRON: createTeamRafflesCronJob chamado (lógica agora em createRafflesCronJob)');
     }
 
-    async finalizeTeamRaffle(raffleId: number, transactionHost?: any): Promise<Raffle> {
-      const transaction = transactionHost ? transactionHost : await this.sequelize.transaction();
+    async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promise<Raffle> {
+      const transaction = transactionHost || await this.sequelize.transaction();
+      let raffle; // Declare raffle outside try
+
       try {
-        // Step 1: Find and lock the Raffle row ONLY
-        const raffle = await this.raffleModel.findByPk(raffleId, {
+        // Step 1: Find and lock the Raffle row
+        // Include ALL tickets with their users and referrer info for prize distribution logic AND for reload/return value
+        raffle = await this.raffleModel.findByPk(raffleId, {
           transaction,
           lock: transaction.LOCK.UPDATE,
-          // NO includes here for locking!
+          include: [{ model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] }],
         });
-  
+
+
         if (!raffle) {
            if (!transactionHost) await transaction.rollback();
-           throw new NotFoundException('Rifa não encontrada.');
+           throw new NotFoundException('Rifa de equipes não encontrada.');
         }
         if (raffle.finished) {
              this.logger.warn(`Tentativa de finalizar rifa de equipes ${raffleId} que já está finalizada.`);
              if (!transactionHost) await transaction.commit();
-             // Reload before returning
-              await raffle.reload({ include: [{ model: User, as: 'winnerUser' }, { model: RaffleTicket, include: [User]}] });
+             // Reload before returning (already included in the initial fetch)
+             // await raffle.reload({...}); // Not needed if already included
              return raffle;
         }
          if (raffle.type !== 'equipes') {
            if (!transactionHost) await transaction.rollback();
            throw new BadRequestException(`A Rifa ${raffleId} é do tipo ${raffle.type} e não pode ser finalizada por este método.`);
          }
-  
+
         const now = new Date();
         const isSoldOut = raffle.soldTickets >= raffle.totalTickets;
         const isEndDateReached = raffle.endDate && raffle.endDate <= now;
-  
+
         if (!isSoldOut && !isEndDateReached) {
              if (!transactionHost) await transaction.rollback(); // Rollback before throwing
            throw new BadRequestException(
              `A rifa de equipes ${raffleId} ainda não pode ser finalizada. Vendidos: ${raffle.soldTickets}/${raffle.totalTickets}. Fim: ${raffle.endDate?.toISOString() ?? 'N/A'}.`
            );
         }
-  
+
         const winningTicketNumberInternal = raffle.winningTicket;
          if (!winningTicketNumberInternal) {
               if (!transactionHost) await transaction.rollback(); // Rollback before throwing
              throw new InternalServerErrorException(`Rifa de equipes ${raffleId} não possui um bilhete sorteado definido.`);
          }
         this.logger.log(`Finalizando Rifa de Equipes ${raffleId}. Bilhete Sorteado (interno): ${winningTicketNumberInternal}`);
-  
-        // Step 2: Fetch associated tickets *within the same transaction*
-        const tickets = await this.raffleTicketModel.findAll({
-            where: { raffleId: raffle.id },
-            include: [{ model: User }], // Include user data for prize calculation
-            transaction, // Ensure it uses the same transaction
-        });
-        // Optional: Attach fetched tickets to the raffle instance if needed by helper functions directly
-        // raffle.tickets = tickets; // Or pass 'tickets' explicitly to helpers
-  
-        // --- Calculation and Distribution Logic (using the fetched 'tickets') ---
-        const totalPotentialPrize = raffle.ticketPrice * raffle.totalTickets;
-        const mainPrize = totalPotentialPrize * 0.5;
-        const teamPrizePool = totalPotentialPrize * 0.3;
+
+        // Use the already included tickets
+        const tickets = raffle.tickets || [];
+
+        // --- Calculation and Distribution Logic ---
+        const totalCollectedValue = raffle.ticketPrice * raffle.soldTickets;
+        const actualMainPrizePool = totalCollectedValue * 0.50; // 50% do coletado para o pool principal
+        const actualTeamPrizePool = totalCollectedValue * 0.30; // 30% do coletado para o pool da equipe
+        // const houseShareBase = totalCollectedValue * 0.20; // 20% do coletado fica com a casa (base)
+
+
         let mainWinnerUserId: number | null = null;
-  
-        // 1. Pagar Prêmio Principal (50%)
+        let mainWinnerNetPrize = 0;
+        let mainWinnerReferrerCommission = 0;
+        let mainWinnerReferrerActive = false; // Track referrer activity status for main winner
+
+        let teamMembersTotalNetPrize = 0; // Total líquido pago aos membros da equipe (excluindo principal)
+        let teamMembersReferrerCommissionTotal = 0; // Total de comissões pagas aos indicadores dos membros da equipe
+        let teamMemberReferrerActiveStatuses: { userId: number, isActive: boolean }[] = []; // Track referrer activity status for each team member
+
+        let numberOfWinningTeamMembersReceivingPrize = 0; // Contagem real de membros que ganharam no pool
+
+        // 1. Processar Ganhador Principal (50%)
         const mainWinningTicket = tickets.find(t => t.ticketNumber === winningTicketNumberInternal);
-        if (mainWinningTicket && mainWinningTicket.user) {
-            mainWinnerUserId = mainWinningTicket.userId;
-            const mainWinner = mainWinningTicket.user; // Use user from fetched ticket
-             this.logger.log(`Prêmio Principal (50% = R$ ${mainPrize.toFixed(2)}) para usuário ${mainWinnerUserId} (${mainWinner.name}) - Bilhete ${winningTicketNumberInternal}`);
-            // IMPORTANT: Use the user instance fetched with the ticket
-            await mainWinner.increment('balance', { by: mainPrize, transaction });
+        const mainWinnerUser = mainWinningTicket?.user; // User model fetched with referrerId
+
+        if (mainWinnerUser) {
+            mainWinnerUserId = mainWinnerUser.id;
+            this.logger.log(`Prêmio Principal (50% = R$ ${actualMainPrizePool.toFixed(2)}) para usuário ${mainWinnerUserId} (${mainWinnerUser.name}) - Bilhete ${winningTicketNumberInternal}`);
+
+            let winnerNetPrizeShare = actualMainPrizePool;
+            let referrerCommissionShare = 0;
+
+            // Check if main winner has a referrer and if referrer is active this month
+            if (mainWinnerUser.referrerId) {
+                 this.logger.log(`Ganhador Principal ${mainWinnerUserId} foi indicado por ${mainWinnerUser.referrerId}.`);
+                 const referrerUser = await this.authService.findReferrerById(mainWinnerUser.id, transaction);
+
+                 if (referrerUser) {
+                    mainWinnerReferrerActive = await this.authService.hasPlayedThisMonth(referrerUser.id, transaction);
+
+                    if (mainWinnerReferrerActive) {
+                        referrerCommissionShare = actualMainPrizePool * 0.05; // 5% do prêmio principal
+                        winnerNetPrizeShare = actualMainPrizePool * 0.95; // 95% do prêmio principal
+
+                        // Creditar comissão ao indicador
+                        this.logger.log(`Indicador ${referrerUser.id} (do Ganhador Principal) está ativo. Creditando comissão de indicação de R$ ${referrerCommissionShare.toFixed(2)}.`);
+                        await this.authService.updateUserBalance(referrerUser.id, referrerCommissionShare, transaction);
+                    } else {
+                         this.logger.log(`Indicador ${referrerUser.id} (do Ganhador Principal) NÃO está ativo este mês. Comissão de R$ ${actualMainPrizePool * 0.05} NÃO creditada e vai para a Casa.`);
+                         // Comissão não é creditada ao indicador, fica implicitamente na Casa. Ganhador recebe o prêmio total.
+                         winnerNetPrizeShare = actualMainPrizePool;
+                         referrerCommissionShare = 0; // Comissão não creditada é 0
+                    }
+                 } else {
+                     this.logger.warn(`Indicador (ID ${mainWinnerUser.referrerId}) do Ganhador Principal ${mainWinnerUserId} não encontrado. Comissão não aplicável/creditada.`);
+                     // Indicador não encontrado, ganhador recebe o prêmio total
+                     winnerNetPrizeShare = actualMainPrizePool;
+                     referrerCommissionShare = 0;
+                     mainWinnerReferrerActive = false; // Não há indicador válido
+                 }
+            } else {
+                 this.logger.log(`Ganhador Principal ${mainWinnerUserId} não foi indicado. Sem comissão para indicador.`);
+                 // Ganhador não tem indicador
+                 winnerNetPrizeShare = actualMainPrizePool;
+                 referrerCommissionShare = 0;
+                 mainWinnerReferrerActive = false; // Não há indicador
+            }
+            mainWinnerNetPrize = winnerNetPrizeShare;
+            mainWinnerReferrerCommission = referrerCommissionShare;
+
+            // Creditar prêmio líquido ao ganhador principal
+            this.logger.log(`Creditando prêmio líquido de R$ ${mainWinnerNetPrize.toFixed(2)} para o Ganhador Principal ${mainWinnerUserId}.`);
+            await this.authService.updateUserBalance(mainWinnerUser.id, mainWinnerNetPrize, transaction);
         } else {
-             this.logger.log(`Ninguém comprou o bilhete principal ${winningTicketNumberInternal}. Prêmio principal não distribuído.`);
+           this.logger.log(`Ninguém comprou o bilhete principal ${winningTicketNumberInternal}. Prêmio principal (R$ ${actualMainPrizePool.toFixed(2)}) não distribuído.`);
+           // mainWinnerUserId remains null
+            mainWinnerReferrerActive = false; // Ninguém ganhou principal
         }
-  
-        // 2. Pagar Prêmio da Equipe (30%)
-         // Pass the fetched tickets to the helper function if it needs them,
-         // otherwise use the tickets variable directly here.
-        const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningTicketNumberInternal); // Pass raffle, ticket number
+
+
+        // 2. Processar Pool da Equipe (30%)
+        const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningTicketNumberInternal);
+
         if (winningTeamName !== 'N/A' && winningTeamName !== 'Inválido' && winningTeamName !== 'Erro') {
-            // Filter from the fetched 'tickets' array
+            // Filter from the fetched 'tickets' array, exclude the main winner
             const winningTeamTickets = tickets.filter(
-                (ticket) => this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber) === winningTeamName
+                (ticket) => this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber) === winningTeamName &&
+                            (mainWinnerUser ? ticket.userId !== mainWinnerUser.id : true) // Excluir o ganhador principal pelo ID se ele existe
             );
-  
-            const teamMemberUserIds = new Set<number>();
-            const userMap = new Map<number, User>(); // Use users fetched with tickets
-  
+
+            const teamMemberUsersWhoBought = new Map<number, User>(); // Map UserID -> User model (with referrerId)
             winningTeamTickets.forEach(ticket => {
-                if (ticket.user && ticket.userId !== mainWinnerUserId) { // Exclude main winner
-                    teamMemberUserIds.add(ticket.userId);
-                     if (!userMap.has(ticket.userId)) {
-                         userMap.set(ticket.userId, ticket.user); // Store user from ticket
-                     }
+                if (ticket.user) { // Ensure ticket has a user
+                     // Usar apenas o primeiro ticket encontrado por usuário para pegar a instância de usuário
+                    if (!teamMemberUsersWhoBought.has(ticket.user.id)) {
+                         teamMemberUsersWhoBought.set(ticket.user.id, ticket.user);
+                    }
                 }
             });
-  
-            const numberOfTeamMembers = teamMemberUserIds.size;
-            if (numberOfTeamMembers > 0) {
-                const individualTeamPrize = teamPrizePool / numberOfTeamMembers;
-                this.logger.log(`Prêmio da Equipe ${winningTeamName} (30% = R$ ${teamPrizePool.toFixed(2)}) dividido entre ${numberOfTeamMembers} membro(s). Cada um recebe R$ ${individualTeamPrize.toFixed(2)}.`);
-  
-                for (const userId of teamMemberUserIds) {
-                    const user = userMap.get(userId); // Get user from the map
-                     if (user) {
-                         // Use the user instance from the map for increment
-                        await user.increment('balance', { by: individualTeamPrize, transaction });
-                         this.logger.log(` - Creditado R$ ${individualTeamPrize.toFixed(2)} para usuário ${userId} (${user.name})`);
-                     } else {
-                          // This case should ideally not happen if tickets include users correctly
-                          this.logger.error(`Usuário ${userId} da equipe vencedora não encontrado no mapa! Prêmio não creditado.`);
-                     }
+
+            numberOfWinningTeamMembersReceivingPrize = teamMemberUsersWhoBought.size;
+
+            if (numberOfWinningTeamMembersReceivingPrize > 0) {
+                const individualTeamPrizeShare = actualTeamPrizePool / numberOfWinningTeamMembersReceivingPrize;
+                this.logger.log(`Equipe Vencedora ${winningTeamName}: ${numberOfWinningTeamMembersReceivingPrize} membro(s) elegível(is) para o prêmio da equipe (R$ ${actualTeamPrizePool.toFixed(2)}). Parte base individual: R$ ${individualTeamPrizeShare.toFixed(2)}.`);
+
+                for (const user of teamMemberUsersWhoBought.values()) {
+                    let memberNetPrizeShare = individualTeamPrizeShare;
+                    let memberReferrerCommissionShare = 0;
+                    let memberReferrerActive = false; // Track referrer activity status for this member
+
+                    // Check if this team member has a referrer and if referrer is active this month
+                    if (user.referrerId) {
+                         this.logger.log(`Membro da equipe vencedora ${user.id} foi indicado por ${user.referrerId}.`);
+                         const referrerUser = await this.authService.findReferrerById(user.id, transaction);
+
+                         if (referrerUser) {
+                              memberReferrerActive = await this.authService.hasPlayedThisMonth(referrerUser.id, transaction);
+
+                             const potentialMemberReferrerCommission = individualTeamPrizeShare * 0.05;
+                             const potentialMemberNetPrize = individualTeamPrizeShare * 0.95;
+
+
+                             if (memberReferrerActive) {
+                                 memberReferrerCommissionShare = potentialMemberReferrerCommission;
+                                 memberNetPrizeShare = potentialMemberNetPrize;
+
+                                // Creditar comissão ao indicador
+                                 this.logger.log(`Indicador ${referrerUser.id} (do membro ${user.id}) está ativo. Creditando comissão de indicação de R$ ${memberReferrerCommissionShare.toFixed(2)}.`);
+                                await this.authService.updateUserBalance(referrerUser.id, memberReferrerCommissionShare, transaction);
+                             } else {
+                                this.logger.log(`Indicador ${referrerUser.id} (do membro ${user.id}) NÃO está ativo este mês. Comissão de R$ ${individualTeamPrizeShare * 0.05} NÃO creditada e vai para a Casa.`);
+                                // Comissão não é creditada, fica na Casa. Membro recebe a parte total.
+                                memberNetPrizeShare = individualTeamPrizeShare;
+                                memberReferrerCommissionShare = 0; // Comissão não creditada é 0
+                             }
+                         } else {
+                            this.logger.warn(`Indicador (ID ${user.referrerId}) do membro da equipe ${user.id} não encontrado. Comissão não aplicável/creditada.`);
+                             // Indicador não encontrado, membro recebe a parte total
+                            memberNetPrizeShare = individualTeamPrizeShare;
+                            memberReferrerCommissionShare = 0;
+                            memberReferrerActive = false; // Não há indicador válido
+                         }
+                    } else {
+                         this.logger.log(`Membro da equipe ${user.id} não foi indicado. Sem comissão para indicador.`);
+                         // Membro não tem indicador
+                         memberNetPrizeShare = individualTeamPrizeShare;
+                         memberReferrerCommissionShare = 0;
+                         memberReferrerActive = false; // Não há indicador
+                    }
+
+                    teamMembersTotalNetPrize += memberNetPrizeShare;
+                    teamMembersReferrerCommissionTotal += memberReferrerCommissionShare;
+                     // Store the active status for calculatePrizeDetails formatting
+                     teamMemberReferrerActiveStatuses.push({ userId: user.id, isActive: memberReferrerActive });
+
+                    // Creditar prêmio líquido ao membro da equipe
+                    this.logger.log(`Creditando prêmio líquido de R$ ${memberNetPrizeShare.toFixed(2)} para o membro da equipe ${user.id}.`);
+                    await this.authService.updateUserBalance(user.id, memberNetPrizeShare, transaction);
                 }
             } else {
-                this.logger.log(`Equipe Vencedora ${winningTeamName}: Nenhum outro membro (além do vencedor principal, se houver) comprou bilhetes. Prêmio da equipe (R$ ${teamPrizePool.toFixed(2)}) não distribuído.`);
+                this.logger.log(`Equipe Vencedora ${winningTeamName}: Nenhum outro membro (além do vencedor principal, se houver) comprou bilhetes. Prêmio da equipe (R$ ${actualTeamPrizePool.toFixed(2)}) não distribuído.`);
             }
         } else {
-            this.logger.log(`Não foi possível determinar a equipe vencedora (ticket: ${winningTicketNumberInternal}, nome: ${winningTeamName}). Prêmio da equipe não distribuído.`);
+            this.logger.log(`Não foi possível determinar a equipe vencedora (ticket: ${winningTicketNumberInternal}, nome: ${winningTeamName}). Prêmio da equipe (R$ ${actualTeamPrizePool.toFixed(2)}) não distribuído.`);
         }
-  
+
         // --- Update Raffle Status ---
         await raffle.update({
           finished: true,
           drawDate: now,
-          winnerUserId: mainWinnerUserId, // Set the main winner (exact ticket holder)
+          winnerUserId: mainWinnerUserId, // Still set the main winner (exact ticket holder)
         }, { transaction });
-  
+
          // --- Commit ---
         if (!transactionHost) await transaction.commit();
         this.logger.log(`Rifa de equipe ${raffleId} finalizada com sucesso.`);
-  
+
          // --- Reload and Return ---
          // Reload outside the lock/transaction logic to get fresh data with relations
-         await raffle.reload({ include: [{ model: User, as: 'winnerUser' }, { model: RaffleTicket, include: [User]}] }); // Include necessary relations
+         // Need winnerUser with referrer and tickets with users+referrer for formatRaffleDetails
+         await raffle.reload({
+               include: [
+                    { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
+                    { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'] }] }
+                ],
+               transaction // Use transaction for reload if applicable
+           });
+
+        // Attach calculated details for formatRaffleDetails to use
+         (raffle as any).winningTeamName = winningTeamName;
+         (raffle as any).winningTeamMembersCount = numberOfWinningTeamMembersReceivingPrize;
+         (raffle as any).mainWinnerReferrerActive = mainWinnerReferrerActive; // Attach main winner referrer status
+         (raffle as any).teamMemberReferrerActiveStatuses = teamMemberReferrerActiveStatuses; // Attach team members referrer statuses
+
+
         return raffle;
-  
+
       } catch (error) {
           // Ensure rollback if transaction was local and error occurred
-         if (!transactionHost && transaction && !transaction.finished) {
+           // Check if transaction exists AND is not completed ('commit' or 'rollback')
+         if (!transactionHost && transaction && (transaction as any).finished === null) { // Use (transaction as any).finished
               try {
                   await transaction.rollback();
-                  this.logger.warn(`Rollback executado para transação da rifa ${raffleId} devido a erro.`);
-              } catch (rollbackError) {
-                   this.logger.error(`Erro ao tentar executar rollback para rifa ${raffleId}: ${rollbackError}`);
+                  this.logger.warn(`Rollback executado para transação da rifa de equipe ${raffleId} devido a erro.`);
+              } catch (rollbackError: any) {
+                   if (!rollbackError.message?.includes('already')) {
+                       this.logger.error(`Erro ao tentar executar rollback no CATCH para rifa de equipe ${raffleId}: ${rollbackError}`);
+                   }
               }
          }
          // Re-throw specific errors or log and throw generic
         if (error instanceof NotFoundException || error instanceof BadRequestException || error instanceof ConflictException || error instanceof InternalServerErrorException) {
            throw error;
         }
-        this.logger.error(`Erro ao finalizar a rifa de equipe ${raffleId}: ${(error as any).message}`, (error as any).stack);
+         // Re-throw specific error from updateUserBalance
+         if (error instanceof Error && ((error as any).isHandled)) { // Check for the .isHandled flag
+             this.logger.error(`Erro esperado durante finalização da rifa ${raffleId}: ${error.message}`);
+             // Converter para InternalServerError se não for um BadRequest que já foi lançado
+             if (!(error instanceof BadRequestException)) {
+                   throw new InternalServerErrorException(`Erro na operação de saldo durante a finalização da rifa ${raffleId}: ${error.message}`);
+             }
+              throw error; // Re-throw BadRequest
+         }
+
+        this.logger.error(`Erro inesperado ao finalizar a rifa de equipe ${raffleId}: ${(error as any).message}`, (error as any).stack);
         throw new InternalServerErrorException('Erro interno ao finalizar a rifa de equipe.');
       }
     }
   
 
 
-  async getRaffleTeamsWithAvailability(raffleId: number): Promise<any> {
+    async getRaffleTeamsWithAvailability(raffleId: number): Promise<any> {
       const raffle = await this.raffleModel.findByPk(raffleId, {
           attributes: ['id', 'type', 'totalTickets', 'finished'], // Inclui 'finished'
           include: [
@@ -1376,10 +1918,11 @@ export class RaffleService {
        if (raffle.finished) throw new BadRequestException('Esta rifa já foi finalizada, não há disponibilidade.');
 
 
+      // getFormattedTeams precisa dos tickets com User (assumindo que raffle já os incluiu)
       const formattedTeams = this.getFormattedTeams(raffle); // Usa a função que retorna números internos 00-99
 
       const allInternalTickets = Array.from({ length: raffle.totalTickets }, (_, i) => i.toString().padStart(2, '0'));
-      const purchasedInternalTickets = new Set(raffle.tickets.map(t => t.ticketNumber));
+      const purchasedInternalTickets = new Set(raffle.tickets?.map(t => t.ticketNumber) || []); // Garantir que raffle.tickets não é null/undefined
 
       const availableTicketsByTeam: { [key: string]: string[] } = {}; // Armazenará números formatados 1-100
 
@@ -1394,7 +1937,12 @@ export class RaffleService {
        Object.values(formattedTeams).forEach((team: any) => {
             team.tickets = team.tickets.map(this.formatTicketNumberDisplay); // Números totais do time
             team.members.forEach((member: any) => {
-                member.tickets = member.tickets.map(this.formatTicketNumberDisplay); // Números comprados pelo membro
+                 // Garante que member.tickets existe antes de chamar map
+                if (member.tickets) {
+                     member.tickets = member.tickets.map(this.formatTicketNumberDisplay); // Números comprados pelo membro
+                } else {
+                    member.tickets = []; // Define como array vazio se não existir
+                }
             });
         });
 

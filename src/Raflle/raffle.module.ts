@@ -1,7 +1,7 @@
 // raffle.module.ts
 import { Module } from '@nestjs/common';
 import { RaffleService } from './raffle.service';
-import { RaffleController } from './raffle.controller'; // Crie isso depois
+import { RaffleController } from './raffle.controller';
 import { SequelizeModule } from '@nestjs/sequelize';
 import { Raffle } from '../models/raffle/raffle.model';
 import { BlockchainHash } from '../models/blockchain-hash.model';
@@ -11,6 +11,7 @@ import { RaffleTicket } from '../models/raffle/raffle-ticket.model';
 
 import { User } from '../models/user/user.model';
 import { Seed } from '../models/seed.model';
+import { AuthModule } from 'src/Auth/auth.module'; // Importar AuthModule
 
 @Module({
   imports: [
@@ -23,8 +24,10 @@ import { Seed } from '../models/seed.model';
       RaffleTicket,
       User,
     ]),
+    AuthModule, // Importar AuthModule aqui
   ],
   providers: [RaffleService],
-  controllers: [RaffleController], // Crie isso depois
+  controllers: [RaffleController],
+  exports: [RaffleService], // Exportar RaffleService se outros módulos precisarem
 })
 export class RaffleModule {}

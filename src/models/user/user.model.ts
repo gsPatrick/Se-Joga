@@ -1,4 +1,4 @@
-import { Table, Column, Model, DataType, HasMany } from 'sequelize-typescript';
+import { Table, Column, Model, DataType, HasMany, ForeignKey, BelongsTo } from 'sequelize-typescript'; // Importar ForeignKey e BelongsTo
 import { RaffleTicket } from '../raffle/raffle-ticket.model';
 import { RouletteBet } from '../roulette/roulette-bet.model';
 import { SlotMachineBet } from '../slot-machine/slot-machine-bet.model';
@@ -9,7 +9,7 @@ import { Raffle } from '../raffle/raffle.model';
 import { RouletteRound } from '../roulette/roulette-round.model';
 import { SlotMachineRound } from '../slot-machine/slot-machine-round.model';
 import { BingoGame } from '../bingo/bingo-game.model';
-import { DiceRound } from '../dice/dice-round.model'; 
+import { DiceRound } from '../dice/dice-round.model';
 import { Challenge } from '../challenges/challenge.model';
 
 export enum UserRole {
@@ -72,6 +72,29 @@ export class User extends Model {
     defaultValue: UserRole.USER,
   })
   role!: UserRole;
+
+  // --- Novos campos para o sistema de indicação ---
+  @Column({
+    type: DataType.STRING,
+    allowNull: true, // Pode ser nulo se o usuário não indicou ninguém ou ainda não gerou o código
+    unique: true, // O código deve ser único
+  })
+  referralCode?: string; // Código que este usuário usa para convidar outros
+
+  @ForeignKey(() => User) // Chave estrangeira para o próprio modelo User
+  @Column({
+    type: DataType.INTEGER,
+    allowNull: true, // Pode ser nulo se o usuário não foi indicado por ninguém
+  })
+  referrerId?: number; // ID do usuário que indicou este usuário
+
+  @BelongsTo(() => User, { foreignKey: 'referrerId', as: 'referrer' }) // Relação para o indicador
+  referrer?: User;
+
+  @HasMany(() => User, { foreignKey: 'referrerId', as: 'referredUsers' }) // Relação para os indicados
+  referredUsers?: User[];
+  // --- Fim dos novos campos ---
+
 
   // Relacionamentos para usuários comuns:
   @HasMany(() => RaffleTicket)
