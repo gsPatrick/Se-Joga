@@ -1,5 +1,24 @@
 // src/payment/pix.controller.ts
-import { Controller, Post, Get, Body, Param, ParseIntPipe, Req, UseGuards, HttpCode, HttpStatus, Logger, InternalServerErrorException, Headers, Query } from '@nestjs/common';
+import { 
+    Controller, 
+    Post, 
+    Get, 
+    Body, 
+    Param, 
+    ParseIntPipe, 
+    Req, 
+    UseGuards, 
+    HttpCode, 
+    HttpStatus, 
+    Logger, 
+    InternalServerErrorException, 
+    BadRequestException, // <-- ADICIONADO
+    NotFoundException,    // <-- ADICIONADO
+    UnauthorizedException, // <-- ADICIONADO
+    ConflictException,   // <-- ADICIONADO
+    Headers, 
+    Query 
+} from '@nestjs/common';
 import { EfiPixService } from './efi-pix.service';
 import { AuthGuard } from '@nestjs/passport';
 import { Request } from 'express';
@@ -182,12 +201,6 @@ export class PixController {
                    // Se o service lançou uma NestJS Exception mapeada, propaga
                    throw error;
               }
-              // Se for um erro de rede/TLS tratado pelo service
-               if ((error as any).isNetworkOrTlsError) {
-                  // O log e a mensagem já foram tratados no service
-                  throw error; // Re-lança o erro tratado
-              }
-
                // Para outros erros não mapeados, loga e lança um InternalServerError genérico
               this.logger.error(`Erro inesperado no controller ao configurar webhook via endpoint: ${(error as any).message}`, (error as any).stack);
               throw new InternalServerErrorException(`Erro interno ao configurar webhook: ${(error as any).message}`);
