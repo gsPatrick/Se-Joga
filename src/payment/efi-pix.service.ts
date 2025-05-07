@@ -113,8 +113,6 @@ export class EfiPixService {
                    }
                    // Para outros 4xx ou 5xx, pode lançar InternalServerError ou re-lançar o erro original
                    if (error.response.status >= 400) {
-                        // Lançar um InternalServerError com a mensagem original da Efí
-                        const efiError = error.response.data?.mensagem || error.message;
                         // Adiciona um flag para indicar que é um erro da Efí
                          (error as any).isEfiError = true;
                          // Re-lança o erro original com o flag
@@ -162,9 +160,6 @@ export class EfiPixService {
                      'Content-Type': 'application/json',
                 },
                 // O certificado já está configurado na instância axios (via httpsAgent)
-                // Configuração adicional para o token endpoint se necessário (ex: ignorar certificado se for o caso)
-                // httpsAgent: // ... pode configurar um agente específico para esta URL se necessário,
-                             // mas o agente da instância padrão já deve ser suficiente se o certificado estiver ok.
             });
 
             const { access_token, expires_in } = response.data;
@@ -187,32 +182,20 @@ export class EfiPixService {
         }
     }
 
-    // --- Método auxiliar para fazer requisições autenticadas (AGORA USANDO BEARER TOKEN OBTIDO) ---
+    // --- Método auxiliar para fazer requisições autenticadas ---
     // Aceita extraConfig, incluindo headers, e garante que Authorization Bearer seja prioritário
     private async makeEfiRequest(method: 'get' | 'post' | 'put' | 'patch' | 'delete', url: string, data?: any, extraConfig?: AxiosRequestConfig): Promise<any> {
-         // Obtém o token (ou do cache ou um novo via getAccessToken)
-        const token = await this.getAccessToken();
+         // NOTA: A autenticação Bearer AGORA é tratada EXPLICITAMENTE ao chamar este método,
+         // passando o token no extraConfig.headers.Authorization.
+         // getAccessToken() AINDA é usado para garantir que o token está disponível,
+         // mas o token em si precisa ser obtido *antes* de chamar este método e passado no extraConfig.
+         // Este método NÃO chama getAccessToken() internamente para obter o token.
 
-        // Headers padrão, incluindo Authorization Bearer
-        const defaultHeaders = {
-             'Authorization': `Bearer ${token}`,
-             // Headers da instância axios (Content-Type, Accept) são aplicados automaticamente DEPOIS
-        };
-
-        // Mescla headers extras (se existirem) com os headers padrão.
-        // A ordem aqui é importante: headers extras primeiro, depois headers padrão.
-        // Isso significa que defaultHeaders SOBREScreve headers extras se houver conflito (ex: Authorization).
-        // No entanto, o Axios mescla os headers passados aqui com os headers da instância Axios.
-        // Para garantir que Bearer token da API da Efí prevaleça, a forma mais segura é
-        // deixar o Axios instance adicionar os headers padrão (Content-Type, Accept)
-        // e apenas definir o Authorization header aqui, MESCLANDO extraConfig.headers SEPARADAMENTE.
-
-         // Forma mais clara: definir headers para esta requisição específicos, mesclando extraConfig.headers
+         // Headers para esta requisição específica, mesclando extraConfig.headers
          const requestHeaders = {
-              ...(extraConfig?.headers || {}), // Começa com headers extras (ex: x-skip-mtls-checking)
-              ...defaultHeaders // Adiciona Authorization Bearer (sobrescreve se já existir no extraConfig)
+              ...(extraConfig?.headers || {}) // Começa com headers passados explicitamente (incluindo Authorization)
+              // Headers padrão da instância axios (Content-Type, Accept) são mesclados automaticamente pelo Axios depois
          };
-
 
         try {
              // Faz a requisição usando a instância axios configurada
@@ -220,7 +203,7 @@ export class EfiPixService {
                 method,
                 url,
                 data,
-                headers: requestHeaders, // Usa os headers mesclados, com Bearer token
+                headers: requestHeaders, // Usa os headers definidos aqui
                 // Remove headers do extraConfig para evitar duplicação/confusão na mescla
                 ...{...extraConfig, headers: undefined} as Omit<AxiosRequestConfig, 'headers'> // Mescla outras configs, excluindo headers
             });
@@ -265,6 +248,8 @@ export class EfiPixService {
          }
          this.logger.debug(`Usando chave Pix EFI: ${efiPixKey}`);
 
+         // Obter o token de acesso para a requisição makeEfiRequest
+         const token = await this.getAccessToken();
 
         const chargeData = {
             calendario: {
@@ -286,8 +271,12 @@ export class EfiPixService {
         };
 
         this.logger.debug(`Chamando EFI POST /v2/cob com dados: ${JSON.stringify(chargeData)}`);
-        // Use makeEfiRequest para chamar a API da Efí
-        const efiResponse = await this.makeEfiRequest('post', '/v2/cob', chargeData);
+        // Use makeEfiRequest para chamar a API da Efí, passando o token no header
+        const efiResponse = await this.makeEfiRequest('post', '/v2/cob', chargeData, {
+            headers: {
+                'Authorization': `Bearer ${token}`, // <-- ADICIONA O TOKEN AQUI MANUALMENTE
+            }
+        });
 
          this.logger.debug(`Resposta da EFI para criação de cobrança: ${JSON.stringify(efiResponse)}`);
 
@@ -351,7 +340,7 @@ export class EfiPixService {
         }
          // Se for o InternalServerErrorException que lançamos por falta da chave:
         if (error instanceof InternalServerErrorException && error.message.includes('EFI_PIX_KEY')) {
-            throw error; // Relançar o erro específico da configuração
+            throw error; // Re-lançar o erro específico da configuração
         }
 
         // Para quaisquer outros erros não mapeados (ex: erro na criação do registro no DB antes do commit, erro de rede não tratado pelo interceptor, etc.)
@@ -416,6 +405,10 @@ export class EfiPixService {
             throw new InternalServerErrorException(errorMessage);
          }
 
+         // Obter o token de acesso para a requisição makeEfiRequest
+         const token = await this.getAccessToken();
+
+
          const withdrawalData = {
             valor: amount.toFixed(2), // Formato string com 2 casas decimais
              pagador: {
@@ -428,8 +421,12 @@ export class EfiPixService {
          };
 
         this.logger.debug(`Chamando EFI PUT /v3/gn/pix/${efiIdEnvio} com dados: ${JSON.stringify(withdrawalData)}`);
-        // Use makeEfiRequest para chamar a API da Efí
-        const efiResponse = await this.makeEfiRequest('put', `/v3/gn/pix/${efiIdEnvio}`, withdrawalData);
+        // Use makeEfiRequest para chamar a API da Efí, passando o token no header
+        const efiResponse = await this.makeEfiRequest('put', `/v3/gn/pix/${efiIdEnvio}`, withdrawalData, {
+             headers: {
+                 'Authorization': `Bearer ${token}`, // <-- ADICIONA O TOKEN AQUI MANUALMENTE
+             }
+        });
 
         this.logger.debug(`Resposta inicial da EFI para requisição de saque (${efiIdEnvio}): ${JSON.stringify(efiResponse)}`);
 
@@ -797,6 +794,8 @@ export class EfiPixService {
              throw new InternalServerErrorException(msg);
          }
 
+         // Obter o token de acesso ANTES de chamar makeEfiRequest
+         const token = await this.getAccessToken();
 
          // Monta a URL completa do seu webhook que a Efí vai chamar
          const webhookUrlToEfí = `${publicHost}/pix/webhook/${webhookSecret}`;
@@ -808,9 +807,12 @@ export class EfiPixService {
          };
 
           // Configuração extra para a requisição, incluindo o header para pular mTLS
+          // E O HEADER DE AUTORIZAÇÃO BEARER explicitamente
          const extraConfig: AxiosRequestConfig = {
               headers: {
-                   'x-skip-mtls-checking': 'true' // Indica à Efí para não validar mTLS no seu servidor
+                   'x-skip-mtls-checking': 'true', // Indica à Efí para não validar mTLS no seu servidor
+                   'Authorization': `Bearer ${token}`, // <--- ADICIONA O TOKEN AQUI MANUALMENTE
+                   // Headers Content-Type e Accept já estão na instância axios
               },
                // Timeout para a requisição de configuração do webhook, se necessário
               // timeout: 5000, // 5 segundos
@@ -818,7 +820,7 @@ export class EfiPixService {
 
 
          try {
-              // Chamar a API da Efí (PUT /v2/webhook/:chave) usando o makeEfiRequest corrigido
+              // Chamar a API da Efí (PUT /v2/webhook/:chave) usando o makeEfiRequest
              const efiResponse = await this.makeEfiRequest('put', `/v2/webhook/${pixKey}`, requestBody, extraConfig);
 
              this.logger.log(`Configuração do webhook na Efí solicitada com sucesso. Resposta: ${JSON.stringify(efiResponse)}`);
@@ -831,7 +833,7 @@ export class EfiPixService {
                   // Relança a NestJS Exception criada no interceptor
                   throw error;
              }
-             // Se for outro erro inesperado, lança um InternalServerError genérico
+             // Se for outro erro inesperado, loga e lança um InternalServerError genérico
              this.logger.error(`Erro inesperado ao configurar webhook na Efí para a chave ${pixKey}: ${error.message}`, error.stack);
              throw new InternalServerErrorException(`Falha ao configurar webhook na Efí: ${error.message}`);
          }

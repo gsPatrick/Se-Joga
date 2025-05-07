@@ -177,8 +177,9 @@ export class PixController {
               };
          } catch (error) {
               // Capturar erros mapeados pelo service (NestJS Exceptions)
-              if (error instanceof InternalServerErrorException) {
-                   // Se o service lançou um InternalServerError, propaga
+              if (error instanceof InternalServerErrorException || error instanceof BadRequestException ||
+                  error instanceof NotFoundException || error instanceof UnauthorizedException || error instanceof ConflictException) {
+                   // Se o service lançou uma NestJS Exception mapeada, propaga
                    throw error;
               }
                // Para outros erros não mapeados, loga e lança um InternalServerError genérico
