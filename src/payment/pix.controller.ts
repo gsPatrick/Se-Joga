@@ -1,5 +1,24 @@
 // src/payment/pix.controller.ts
-import { Controller, Post, Get, Body, Param, ParseIntPipe, Req, UseGuards, HttpCode, HttpStatus, Logger, InternalServerErrorException, Headers, Query } from '@nestjs/common';
+import { 
+    Controller, 
+    Post, 
+    Get, 
+    Body, 
+    Param, 
+    ParseIntPipe, 
+    Req, 
+    UseGuards, 
+    HttpCode, 
+    HttpStatus, 
+    Logger, 
+    InternalServerErrorException, 
+    BadRequestException, // <-- ADICIONADO
+    NotFoundException,    // <-- ADICIONADO
+    UnauthorizedException, // <-- ADICIONADO
+    ConflictException,   // <-- ADICIONADO
+    Headers, 
+    Query 
+} from '@nestjs/common';
 import { EfiPixService } from './efi-pix.service';
 import { AuthGuard } from '@nestjs/passport';
 import { Request } from 'express';
