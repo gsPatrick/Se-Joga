@@ -10,7 +10,7 @@ import { Transaction, Op } from 'sequelize';
 import { v4 as uuidv4 } from 'uuid';
 
 // --- Imports para cliente HTTP ---
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig, RawAxiosRequestHeaders } from 'axios'; // Adicionado RawAxiosRequestHeaders
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
@@ -36,6 +36,7 @@ export class EfiPixService {
   private configureAxiosInstance() {
       const certPath = this.configService.get<string>('EFI_CERT_PATH');
       const certPassword = this.configService.get<string>('EFI_CERT_PASSWORD') || '';
+      // Usando a URL de produção conforme sua última intenção
       const efiBaseUrl = this.configService.get<string>('EFI_BASE_URL') || 'https://pix.api.efipay.com.br';
 
       // Verifica se o certificado existe ANTES de criar o httpsAgent
@@ -53,10 +54,11 @@ export class EfiPixService {
 
       this.efipayApi = axios.create({
           baseURL: efiBaseUrl,
-          headers: {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-          },
+          // REMOVENDO HEADERS PADRÃO DA INSTÂNCIA AQUI
+          // headers: {
+          //     'Content-Type': 'application/json',
+          //     'Accept': 'application/json',
+          // },
           httpsAgent: certExists ? new https.Agent({ // Configurar HTTPS com certificado SOMENTE se o caminho for fornecido E o arquivo existir
                pfx: fs.readFileSync(resolvedCertPath), // Carrega o certificado P12/PFX
                passphrase: certPassword, // Senha do certificado
@@ -155,9 +157,11 @@ export class EfiPixService {
                 grant_type: 'client_credentials',
             }, {
                  // Headers de Basic Auth específicos para esta requisição
+                 // Define headers COMPLETAMENTE aqui, sem depender dos da instância Axios
                 headers: {
                     'Authorization': `Basic ${basicAuth}`,
-                     'Content-Type': 'application/json',
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
                 // O certificado já está configurado na instância axios (via httpsAgent)
             });
@@ -191,21 +195,25 @@ export class EfiPixService {
          // mas o token em si precisa ser obtido *antes* de chamar este método e passado no extraConfig.
          // Este método NÃO chama getAccessToken() internamente para obter o token.
 
-         // Headers para esta requisição específica, mesclando extraConfig.headers
-         const requestHeaders = {
-              ...(extraConfig?.headers || {}) // Começa com headers passados explicitamente (incluindo Authorization)
-              // Headers padrão da instância axios (Content-Type, Accept) são mesclados automaticamente pelo Axios depois
-         };
-
         try {
-             // Faz a requisição usando a instância axios configurada
+             // Cria o objeto de headers para esta requisição
+             // Define Content-Type e Accept explicitamente AQUI também
+             const requestHeaders: RawAxiosRequestHeaders = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                 // Adiciona quaisquer headers passados no extraConfig, incluindo Authorization
+                ...(extraConfig?.headers as RawAxiosRequestHeaders || {}),
+             };
+
+             // Remove headers do extraConfig para evitar duplicação/confusão na mescla com requestHeaders
+             const configWithoutHeaders = {...extraConfig, headers: undefined} as Omit<AxiosRequestConfig, 'headers'>;
+
             const response = await this.efipayApi({
                 method,
                 url,
                 data,
                 headers: requestHeaders, // Usa os headers definidos aqui
-                // Remove headers do extraConfig para evitar duplicação/confusão na mescla
-                ...{...extraConfig, headers: undefined} as Omit<AxiosRequestConfig, 'headers'> // Mescla outras configs, excluindo headers
+                ...configWithoutHeaders // Mescla outras configs
             });
             return response.data; // Retorna apenas a parte 'data' da resposta
         } catch (error: any) {
@@ -320,7 +328,7 @@ export class EfiPixService {
              }
          }
 
-         // Se o registro foi criado antes de falhar na chamada da API, marcá-lo como falho (se possível)
+         // Se o registro foi criado antes de falhar na chamada da API, marcar como falho (se possível)
          // Isso é feito fora da transação original que falhou.
          if (depositRecord && depositRecord.id && depositRecord.status === DepositStatus.PENDING) {
             try {
@@ -812,7 +820,7 @@ export class EfiPixService {
               headers: {
                    'x-skip-mtls-checking': 'true', // Indica à Efí para não validar mTLS no seu servidor
                    'Authorization': `Bearer ${token}`, // <--- ADICIONA O TOKEN AQUI MANUALMENTE
-                   // Headers Content-Type e Accept já estão na instância axios
+                   // Headers Content-Type e Accept não estão mais na instância, então os definimos no makeEfiRequest
               },
                // Timeout para a requisição de configuração do webhook, se necessário
               // timeout: 5000, // 5 segundos
