@@ -9,8 +9,8 @@ import { Sequelize } from 'sequelize-typescript';
 import { Transaction, Op } from 'sequelize';
 import { v4 as uuidv4 } from 'uuid';
 
-// --- Adicionar imports para cliente HTTP ---
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios'; // Adicionado AxiosRequestConfig
+// --- Imports para cliente HTTP ---
+import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
@@ -38,8 +38,16 @@ export class EfiPixService {
       const certPassword = this.configService.get<string>('EFI_CERT_PASSWORD') || '';
       const efiBaseUrl = this.configService.get<string>('EFI_BASE_URL') || 'https://pix-h.api.efipay.com.br';
 
+      // Verifica se o certificado existe ANTES de criar o httpsAgent
+      const resolvedCertPath = path.resolve(certPath || ''); // Resolve mesmo que certPath seja undefined/vazio
+      const certExists = certPath && fs.existsSync(resolvedCertPath);
+
+
       if (!certPath) {
-          this.logger.error('Caminho do certificado EFI não configurado no .env (EFI_CERT_PATH). A API da Efí não funcionará.');
+          this.logger.warn('Caminho do certificado EFI não configurado no .env (EFI_CERT_PATH). Requisições mTLS para a API da Efí NÃO funcionarão, exceto a de autenticação se não exigir cert.');
+      } else if (!certExists) {
+           this.logger.error(`Certificado EFI não encontrado no caminho configurado: ${resolvedCertPath}. Requisições mTLS para a API da Efí FALHARÃO.`);
+            // Em um cenário real, você pode querer lançar um erro fatal na inicialização aqui
       }
 
 
@@ -49,101 +57,177 @@ export class EfiPixService {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
           },
-          httpsAgent: certPath ? new https.Agent({
-               pfx: fs.readFileSync(path.resolve(certPath)),
-               passphrase: certPassword,
-          }) : undefined,
+          httpsAgent: certExists ? new https.Agent({ // Configurar HTTPS com certificado SOMENTE se o caminho for fornecido E o arquivo existir
+               pfx: fs.readFileSync(resolvedCertPath), // Carrega o certificado P12/PFX
+               passphrase: certPassword, // Senha do certificado
+          }) : undefined, // Use undefined se não houver certPath ou o arquivo não existir
+           // Desabilitar redirect para controlar melhor
+          maxRedirects: 0,
+          // Opcional: aumentar timeout para requisições de API se a rede for lenta
+          // timeout: 10000, // 10 segundos
       });
 
+       // Interceptor de log
        this.efipayApi.interceptors.request.use(request => {
            const headers = { ...request.headers };
             if (headers['Authorization']) {
                 headers['Authorization'] = '[Redacted]';
             }
            this.logger.debug(`Fazendo requisição para EFI: ${request.method?.toUpperCase()} ${request.url}. Headers: ${JSON.stringify(headers)}`);
+           // Opcional: logar corpo da requisição, com cuidado para dados sensíveis/grandes
+           // if (request.data) this.logger.debug(`Corpo da requisição: ${JSON.stringify(request.data)}`);
            return request;
        }, error => {
             this.logger.error(`Erro na requisição (Interceptor): ${error.message}`);
            return Promise.reject(error);
        });
 
+        // Interceptor de resposta
        this.efipayApi.interceptors.response.use(response => {
            this.logger.debug(`Resposta da EFI: ${response.status} ${response.config.method?.toUpperCase()} ${response.config.url}`);
+            // Opcional: logar corpo da resposta, com cuidado para dados sensíveis/grandes
+            // if (response.data) this.logger.debug(`Corpo da resposta: ${JSON.stringify(response.data)}`);
            return response;
        }, error => {
-            if (error.response) {
-                this.logger.error(`Erro da EFI (Resposta): ${error.response.status} ${error.response.config.method?.toUpperCase()} ${error.response.config.url} - ${JSON.stringify(error.response.data)}`);
-            } else if (error.request) {
-                this.logger.error(`Erro da EFI (Requisição): Sem resposta recebida - ${error.message} - ${error.config?.method?.toUpperCase()} ${error.config?.url}`);
-            } else {
-                this.logger.error(`Erro da EFI (Setup): Erro ao configurar requisição - ${error.message}`);
-            }
-           return Promise.reject(error);
+            // O log detalhado já é feito pelo interceptor.
+            // Mapear erros comuns da Efí para exceções NestJS claras para o controller.
+             if (error.response) {
+                 this.logger.error(`Erro da EFI (Resposta): ${error.response.status} ${error.response.config.method?.toUpperCase()} ${error.response.config.url} - ${JSON.stringify(error.response.data)}`);
+
+                  // Mapear alguns erros comuns da Efí para exceções NestJS
+                  if (error.response.status === 400) {
+                      // Erros 400 da Efí geralmente indicam erro nos dados enviados (BadRequest)
+                      throw new BadRequestException(error.response.data);
+                  }
+                   if (error.response.status === 401) {
+                       // Erros 401 indicam problema de autenticação (Unauthorized)
+                       throw new UnauthorizedException(error.response.data);
+                   }
+                   if (error.response.status === 404) {
+                       // Erros 404 indicam recurso não encontrado (NotFound)
+                       throw new NotFoundException(error.response.data);
+                   }
+                    if (error.response.status === 409) {
+                       // Erros 409 indicam conflito (Conflict)
+                       throw new ConflictException(error.response.data);
+                   }
+                   // Para outros 4xx ou 5xx, pode lançar InternalServerError ou re-lançar o erro original
+                   if (error.response.status >= 400) {
+                        // Lançar um InternalServerError com a mensagem original da Efí
+                        const efiError = error.response.data?.mensagem || error.message;
+                        // Adiciona um flag para indicar que é um erro da Efí
+                         (error as any).isEfiError = true;
+                         // Re-lança o erro original com o flag
+                         return Promise.reject(error); // Permite que o catcher capture e decida se lança NestJS exception
+                   }
+
+             } else if (error.request) {
+                 this.logger.error(`Erro da EFI (Requisição): Sem resposta recebida - ${error.message} - ${error.config?.method?.toUpperCase()} ${error.config?.url}`);
+             } else {
+                 this.logger.error(`Erro da EFI (Setup): Erro ao configurar requisição - ${error.message}`);
+             }
+              // Para erros de rede ou outros não tratados acima, re-lança o erro original
+             return Promise.reject(error);
        });
   }
 
 
-  private async getAccessToken(): Promise<string> {
-      if (this.accessToken && this.tokenExpiry && this.tokenExpiry > new Date(Date.now() + 5 * 60 * 1000)) {
-          this.logger.debug('Utilizando token da Efí em cache.');
-          return this.accessToken!;
-      }
+    // --- Método para obter/gerenciar o token de acesso (SEM USO DE makeEfiRequest) ---
+    private async getAccessToken(): Promise<string> {
+        if (this.accessToken && this.tokenExpiry && this.tokenExpiry > new Date(Date.now() + 5 * 60 * 1000)) {
+            this.logger.debug('Utilizando token da Efí em cache.');
+            return this.accessToken!;
+        }
 
-      this.logger.log('Obtendo novo token de acesso da Efí...');
-      const clientId = this.configService.get<string>('EFI_CLIENT_ID');
-      const clientSecret = this.configService.get<string>('EFI_CLIENT_SECRET');
+        this.logger.log('Obtendo novo token de acesso da Efí...');
+        const clientId = this.configService.get<string>('EFI_CLIENT_ID');
+        const clientSecret = this.configService.get<string>('EFI_CLIENT_SECRET');
 
-      if (!clientId || !clientSecret) {
-           const errorMessage = 'Credenciais da Efí (Client ID/Secret) não configuradas no .env.';
-           this.logger.error(errorMessage);
-           throw new InternalServerErrorException(errorMessage);
-      }
+        if (!clientId || !clientSecret) {
+            const errorMessage = 'Credenciais da Efí (Client ID/Secret) não configuradas no .env.';
+            this.logger.error(errorMessage);
+            throw new InternalServerErrorException(errorMessage);
+        }
 
-      const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+        const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
-      try {
-          const response = await this.efipayApi.post('/oauth/token', {
-              grant_type: 'client_credentials',
-          }, {
-              headers: {
-                  'Authorization': `Basic ${basicAuth}`,
-              },
-          });
-
-          const { access_token, expires_in } = response.data;
-          if (!access_token || expires_in === undefined) {
-               const errorMessage = 'Resposta inesperada da Efí ao obter token.';
-               this.logger.error(`${errorMessage} Resposta: ${JSON.stringify(response.data)}`);
-               throw new InternalServerErrorException(errorMessage);
-          }
-
-          this.accessToken = access_token;
-          this.tokenExpiry = new Date(Date.now() + expires_in * 1000);
-
-          this.logger.log('Novo token da Efí obtido com sucesso.');
-          return this.accessToken!;
-      } catch (error: any) {
-          throw error;
-      }
-  }
-
-    // --- Método auxiliar para fazer requisições autenticadas ---
-    // Adicionado parametro opcional extraConfig para passar headers específicos, etc.
-    private async makeEfiRequest(method: 'get' | 'post' | 'put' | 'patch' | 'delete', url: string, data?: any, extraConfig?: AxiosRequestConfig): Promise<any> {
-        const token = await this.getAccessToken();
         try {
+            // FAZ A REQUISIÇÃO DIRETA COM AXIOS INSTANCE (SEM makeEfiRequest)
+            const response = await this.efipayApi.post('/oauth/token', {
+                grant_type: 'client_credentials',
+            }, {
+                 // Headers de Basic Auth específicos para esta requisição
+                headers: {
+                    'Authorization': `Basic ${basicAuth}`,
+                     'Content-Type': 'application/json',
+                },
+                // O certificado já está configurado na instância axios (via httpsAgent)
+                // Configuração adicional para o token endpoint se necessário (ex: ignorar certificado se for o caso)
+                // httpsAgent: // ... pode configurar um agente específico para esta URL se necessário,
+                             // mas o agente da instância padrão já deve ser suficiente se o certificado estiver ok.
+            });
+
+            const { access_token, expires_in } = response.data;
+            if (!access_token || expires_in === undefined) {
+                const errorMessage = 'Resposta inesperada da Efí ao obter token.';
+                this.logger.error(`${errorMessage} Resposta: ${JSON.stringify(response.data)}`);
+                throw new InternalServerErrorException(errorMessage);
+            }
+
+            this.accessToken = access_token;
+            this.tokenExpiry = new Date(Date.now() + expires_in * 1000); // expires_in é em segundos
+
+            this.logger.log('Novo token da Efí obtido com sucesso.');
+            return this.accessToken!;
+        } catch (error: any) {
+            // O log detalhado já é feito pelo interceptor.
+             // Mapear erros específicos do endpoint /oauth/token se necessário,
+             // mas o interceptor já trata 401, 400, etc.
+            throw error; // Re-lança o erro já tratado (ou não) pelo interceptor
+        }
+    }
+
+    // --- Método auxiliar para fazer requisições autenticadas (AGORA USANDO BEARER TOKEN OBTIDO) ---
+    // Aceita extraConfig, incluindo headers, e garante que Authorization Bearer seja prioritário
+    private async makeEfiRequest(method: 'get' | 'post' | 'put' | 'patch' | 'delete', url: string, data?: any, extraConfig?: AxiosRequestConfig): Promise<any> {
+         // Obtém o token (ou do cache ou um novo via getAccessToken)
+        const token = await this.getAccessToken();
+
+        // Headers padrão, incluindo Authorization Bearer
+        const defaultHeaders = {
+             'Authorization': `Bearer ${token}`,
+             // Headers da instância axios (Content-Type, Accept) são aplicados automaticamente DEPOIS
+        };
+
+        // Mescla headers extras (se existirem) com os headers padrão.
+        // A ordem aqui é importante: headers extras primeiro, depois headers padrão.
+        // Isso significa que defaultHeaders SOBREScreve headers extras se houver conflito (ex: Authorization).
+        // No entanto, o Axios mescla os headers passados aqui com os headers da instância Axios.
+        // Para garantir que Bearer token da API da Efí prevaleça, a forma mais segura é
+        // deixar o Axios instance adicionar os headers padrão (Content-Type, Accept)
+        // e apenas definir o Authorization header aqui, MESCLANDO extraConfig.headers SEPARADAMENTE.
+
+         // Forma mais clara: definir headers para esta requisição específicos, mesclando extraConfig.headers
+         const requestHeaders = {
+              ...(extraConfig?.headers || {}), // Começa com headers extras (ex: x-skip-mtls-checking)
+              ...defaultHeaders // Adiciona Authorization Bearer (sobrescreve se já existir no extraConfig)
+         };
+
+
+        try {
+             // Faz a requisição usando a instância axios configurada
             const response = await this.efipayApi({
                 method,
                 url,
                 data,
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                     ...extraConfig?.headers // Mescla headers extras
-                },
-                 ...extraConfig // Mescla outras configurações como httpsAgent (já configurado na instância, mas pode ser sobrescrito se necessário)
+                headers: requestHeaders, // Usa os headers mesclados, com Bearer token
+                // Remove headers do extraConfig para evitar duplicação/confusão na mescla
+                ...{...extraConfig, headers: undefined} as Omit<AxiosRequestConfig, 'headers'> // Mescla outras configs, excluindo headers
             });
-            return response.data;
+            return response.data; // Retorna apenas a parte 'data' da resposta
         } catch (error: any) {
+             // O interceptor já logou o erro e mapeou alguns para NestJS Exceptions.
+             // Re-lançar o erro para ser tratado pelo código chamador.
              throw error;
         }
     }
@@ -191,9 +275,18 @@ export class EfiPixService {
             },
              chave: efiPixKey,
             solicitacaoPagador: `Depósito para usuário ${userId} na Loto Jack (ID Transacao: ${depositRecord.id})`,
+             // Opcional: Incluir dados do devedor (usuário) se quiser e a API user.model tiver esses dados
+             // Para isso, você precisaria carregar o usuário completo antes de criar o chargeData:
+             // const user = await this.authService.findCurrentUser(userId); // OU findUserById? Melhor buscar na transação
+             // const user = await this.userModel.findByPk(userId, { transaction }); // Se userModel for injetado aqui
+             // devedor: {
+             //     cpf: user.cpf.replace(/\D/g, ''), // Formato apenas números
+             //     nome: user.name,
+             // },
         };
 
         this.logger.debug(`Chamando EFI POST /v2/cob com dados: ${JSON.stringify(chargeData)}`);
+        // Use makeEfiRequest para chamar a API da Efí
         const efiResponse = await this.makeEfiRequest('post', '/v2/cob', chargeData);
 
          this.logger.debug(`Resposta da EFI para criação de cobrança: ${JSON.stringify(efiResponse)}`);
@@ -201,16 +294,17 @@ export class EfiPixService {
         if (!efiResponse || !efiResponse.txid || !efiResponse.pixCopiaECola || !efiResponse.loc?.location) {
             const errorMessage = 'Resposta inesperada da Efí ao criar cobrança: dados de retorno incompletos (txid, pixCopiaECola, location).';
              this.logger.error(`${errorMessage} Resposta completa: ${JSON.stringify(efiResponse)}`);
+             // Lançar erro mapeado no interceptor ou InternalServerError aqui
             throw new InternalServerErrorException(errorMessage);
         }
 
-         // Certifique-se que o campo efiCreateChargePayload existe no seu modelo Deposit
+        // Atualizar o registro de depósito com os dados da resposta da Efí
+         // Certifique-se que o campo efiCreateChargePayload existe no seu modelo Deposit (removido do update temporariamente)
         await depositRecord.update({
             efiTxid: efiResponse.txid,
             qrCodeImage: efiResponse.loc.location,
             pixCopiaECola: efiResponse.pixCopiaECola,
-             // efiCreateChargePayload: efiResponse, // Descomentar se o campo existir
-            status: DepositStatus.PENDING,
+            status: DepositStatus.PENDING, // O status ATIVA da Efí mapeia para PENDING na nossa app até o PIX ser pago.
         }, { transaction });
         this.logger.log(`Registro de depósito ${depositRecord.id} atualizado com dados da Efí (txid ${depositRecord.efiTxid}, QR Code URL, Pix Copia e Cola). Status: PENDING.`);
 
@@ -219,11 +313,13 @@ export class EfiPixService {
 
         this.logger.log(`Cobrança de depósito ${depositRecord.id} criada com sucesso na Efí e registro local finalizado.`);
 
+         // Recarregar o registro após o commit para garantir que a instância retornada esteja "limpa" e completa
         await depositRecord.reload();
 
         return depositRecord;
 
     } catch (error) {
+        // Rollback da transação local em caso de erro
          if (transaction && !(transaction as any).finished) {
              try {
                  await transaction.rollback();
@@ -235,9 +331,11 @@ export class EfiPixService {
              }
          }
 
+         // Se o registro foi criado antes de falhar na chamada da API, marcá-lo como falho (se possível)
+         // Isso é feito fora da transação original que falhou.
          if (depositRecord && depositRecord.id && depositRecord.status === DepositStatus.PENDING) {
             try {
-               const updateTransaction = await this.sequelize.transaction();
+               const updateTransaction = await this.sequelize.transaction(); // Nova transação
                await depositRecord.update({ status: DepositStatus.FAILED }, { transaction: updateTransaction });
                await updateTransaction.commit();
                this.logger.error(`Registro de depósito ${depositRecord.id} (txid: ${depositRecord.efiTxid ?? 'N/A'}) marcado como FAILED após falha na criação da cobrança na Efí.`);
@@ -246,13 +344,17 @@ export class EfiPixService {
             }
          }
 
+        // Propagar o erro. O interceptor já logou erros da Efí e mapeou alguns.
+        // Se o erro já é uma NestJS Exception mapeada pelo interceptor:
         if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof UnauthorizedException || error instanceof ConflictException) {
-            throw error;
+            throw error; // Relançar exceções NestJS mapeadas
         }
+         // Se for o InternalServerErrorException que lançamos por falta da chave:
         if (error instanceof InternalServerErrorException && error.message.includes('EFI_PIX_KEY')) {
-            throw error;
+            throw error; // Relançar o erro específico da configuração
         }
 
+        // Para quaisquer outros erros não mapeados (ex: erro na criação do registro no DB antes do commit, erro de rede não tratado pelo interceptor, etc.)
         this.logger.error(`Erro inesperado ao criar cobrança de depósito para usuário ${userId}: ${(error as any).message}`, (error as any).stack);
         throw new InternalServerErrorException('Erro interno ao solicitar depósito.');
     }
@@ -260,14 +362,16 @@ export class EfiPixService {
 
   // --- Lógica de Saque ---
   async requestWithdrawal(userId: number, amount: number, pixKeyData: { keyType: string; keyValue: string; name?: string; cpfCnpj?: string }): Promise<Withdrawal> {
+    // Validar formato do valor
     if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
         this.logger.error(`requestWithdrawal: Valor do saque inválido recebido para usuário ${userId}: ${amount}`);
         throw new BadRequestException('Valor do saque inválido.');
     }
+    // Limitar casas decimais
     const amountFixed = parseFloat(amount.toFixed(2));
      if (amountFixed !== amount) {
          this.logger.warn(`requestWithdrawal: Valor do saque para usuário ${userId} ajustado de ${amount} para ${amountFixed} para corresponder a 2 casas decimais.`);
-          amount = amountFixed;
+          amount = amountFixed; // Usar o valor ajustado
      }
 
     if (!pixKeyData || !pixKeyData.keyType || !pixKeyData.keyValue) {
@@ -275,14 +379,19 @@ export class EfiPixService {
         throw new BadRequestException('Dados da chave Pix incompletos.');
     }
 
+    // INICIAR TRANSAÇÃO LOCAL para garantir débito e criação do registro
     const transaction = await this.sequelize.transaction();
-    let withdrawalRecord: Withdrawal | null = null;
+    let withdrawalRecord: Withdrawal | null = null; // Declare outside try
 
     try {
+        // 1. Validar e debitar o saldo do usuário
+         // Use updateUserBalance transacional
         const user = await this.authService.updateUserBalance(userId, -amount, transaction);
         this.logger.log(`Saldo do usuário ${userId} debitado em R$ ${amount.toFixed(2)} para saque.`);
 
-        const efiIdEnvio = uuidv4().replace(/-/g, '');
+
+        // 2. Crie o registro de saque inicialmente como PROCESSING
+        const efiIdEnvio = uuidv4().replace(/-/g, ''); // Gerar um ID único para este envio
         this.logger.debug(`Generated efiIdEnvio (without hyphens): ${efiIdEnvio}`);
 
         withdrawalRecord = await this.withdrawalModel.create({
@@ -291,43 +400,59 @@ export class EfiPixService {
             status: WithdrawalStatus.PROCESSING,
             targetPixKeyType: pixKeyData.keyType,
             targetPixKey: pixKeyData.keyValue,
-            targetName: pixKeyData.name,
+            targetName: pixKeyData.name, // Incluir dados adicionais se fornecidos
             targetCpfCnpj: pixKeyData.cpfCnpj,
-            efiIdEnvio: efiIdEnvio,
+            efiIdEnvio: efiIdEnvio, // Armazenar o ID gerado para a Efí
         }, { transaction });
         this.logger.log(`Registro de saque ${withdrawalRecord.id} criado para o usuário ${userId}, valor R$ ${amount.toFixed(2)}. Status: PROCESSING. efiIdEnvio: ${efiIdEnvio}`);
 
 
+        // 3. Chamar a API da Efí para requisitar o envio de Pix PUT /v3/gn/pix/:idEnvio
+         const efiPixKeyPagador = this.configService.get<string>('EFI_PIX_KEY'); // Chave da sua conta Efí
+         if (!efiPixKeyPagador) {
+             const errorMessage = 'Chave Pix da conta pagadora (EFI_PIX_KEY) não configurada no .env. Não é possível solicitar saque.';
+             this.logger.error(errorMessage);
+             // A transação ainda está ativa, o catch abaixo fará o rollback.
+            throw new InternalServerErrorException(errorMessage);
+         }
+
          const withdrawalData = {
-            valor: amount.toFixed(2),
+            valor: amount.toFixed(2), // Formato string com 2 casas decimais
              pagador: {
-                 chave: this.configService.get<string>('EFI_PIX_KEY'),
-                 infoPagador: `Saque Loto Jack (ID: ${withdrawalRecord.id}, User: ${userId})`,
+                 chave: efiPixKeyPagador, // Chave da sua conta Efí
+                 infoPagador: `Saque Loto Jack (ID: ${withdrawalRecord.id}, User: ${userId})`, // Exemplo de info
              },
              favorecido: {
-                 chave: pixKeyData.keyValue,
+                 chave: pixKeyData.keyValue, // Chave do usuário que está sacando
              }
          };
 
         this.logger.debug(`Chamando EFI PUT /v3/gn/pix/${efiIdEnvio} com dados: ${JSON.stringify(withdrawalData)}`);
+        // Use makeEfiRequest para chamar a API da Efí
         const efiResponse = await this.makeEfiRequest('put', `/v3/gn/pix/${efiIdEnvio}`, withdrawalData);
 
         this.logger.debug(`Resposta inicial da EFI para requisição de saque (${efiIdEnvio}): ${JSON.stringify(efiResponse)}`);
 
+         // A resposta inicial pode incluir um 'e2eId' provisório ou outros detalhes.
+         // Atualizar o registro de saque com quaisquer dados relevantes retornados.
+         // Certifique-se que o campo efiRequestPayload exista no seu modelo Withdrawal (removido do update temporariamente)
          await withdrawalRecord.update({
-              efiE2eId: efiResponse.e2eId,
+              efiE2eId: efiResponse.e2eId, // Se vier na resposta inicial (pode ser nulo/undefined)
          }, { transaction });
 
 
+        // 4. Commit da transação local
         await transaction.commit();
 
         this.logger.log(`Saque ${withdrawalRecord.id} (efiIdEnvio: ${efiIdEnvio}) para R$ ${amount.toFixed(2)} solicitado para chave ${pixKeyData.keyValue} (tipo ${pixKeyData.keyType}). Status: PROCESSING.`);
 
+         // Recarregar para garantir que os dados estejam completos para retorno após o commit (opcional)
         await withdrawalRecord.reload();
 
         return withdrawalRecord;
 
     } catch (error) {
+        // Rollback da transação local em caso de erro
          if (transaction && !(transaction as any).finished) {
              try {
                  await transaction.rollback();
@@ -339,7 +464,10 @@ export class EfiPixService {
              }
          }
 
-         if (error instanceof Error && ((error as any).isHandled)) {
+         // Tratar erros específicos do updateUserBalance (saldo insuficiente)
+         if (error instanceof Error && ((error as any).isHandled)) { // Verifica a flag .isHandled adicionada pelo AuthService
+              // Se o registro de saque foi criado antes de falhar no débito de saldo (o que não deve acontecer com a ordem na transação,
+              // mas como fallback) ou na chamada da Efí, marcar como FAILED.
               if (withdrawalRecord && withdrawalRecord.id && withdrawalRecord.status === WithdrawalStatus.PROCESSING) {
                  try {
                     const updateTransaction = await this.sequelize.transaction();
@@ -350,10 +478,17 @@ export class EfiPixService {
                     this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED após erro de saldo: ${(updateError as any).message}`);
                  }
              }
-             throw new BadRequestException('Saldo insuficiente para concluir o saque.');
+              // Se o erro for o de saldo insuficiente do AuthService, lança BadRequest
+             if (error.message.includes('Saldo insuficiente')) {
+                throw new BadRequestException('Saldo insuficiente para concluir o saque.');
+             }
+             // Se for outro erro .isHandled, pode ser um erro interno do AuthService
+              throw new InternalServerErrorException(`Erro na operação de saldo durante o saque: ${error.message}`);
          }
 
+         // Tratar erros da chamada makeEfiRequest (que já foram logados e mapeados no interceptor)
          if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof UnauthorizedException || error instanceof ConflictException) {
+              // Se o registro de saque foi criado antes de falhar na chamada da Efí, marcar como FAILED.
               if (withdrawalRecord && withdrawalRecord.id && withdrawalRecord.status === WithdrawalStatus.PROCESSING) {
                  try {
                     const updateTransaction = await this.sequelize.transaction();
@@ -364,11 +499,17 @@ export class EfiPixService {
                     this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED após erro na requisição Efí: ${(updateError as any).message}`);
                  }
              }
-             throw error;
+             throw error; // Re-lança o erro mapeado pelo interceptor
+         }
+         // Se o erro for o InternalServerErrorException que lançamos por falta da chave:
+         if (error instanceof InternalServerErrorException && error.message.includes('Chave Pix da conta pagadora')) {
+             throw error; // Re-lançar o erro específico da configuração
          }
 
 
+         // Para quaisquer outros erros não mapeados
          this.logger.error(`Erro inesperado ao solicitar saque para usuário ${userId}: ${(error as any).message}`, (error as any).stack);
+         // Tentar marcar o registro de saque como FAILED se ele existe e está como PROCESSING
          if (withdrawalRecord && withdrawalRecord.id && withdrawalRecord.status === WithdrawalStatus.PROCESSING) {
             try {
                const updateTransaction = await this.sequelize.transaction();
@@ -385,32 +526,46 @@ export class EfiPixService {
 
 
   // --- Lógica de Webhook ---
+  // Nota: A validação de segurança (HMAC, Certificado) deve ser feita no controlador ANTES de chamar este método,
+  // ou este método deve receber o rawBody e o segredo para fazer a validação internamente.
+  // Por simplicidade, a validação básica do segredo na URL é feita no controller.
   async handleWebhook(efiPayload: any): Promise<void> {
-      const expectedWebhookSecret = this.configService.get<string>('EFI_WEBHOOK_SECRET');
-      // NOTA: A validação real do segredo é feita no controller antes de chamar este método.
-      // Este método assume que a validação básica (segredo na URL) já passou.
-      // A validação mais robusta (HMAC) DEVE ser implementada.
+      // TODO: Implementar validação de segurança do webhook MAIS ROBUSTA (mTLS ou skip-mTLS com HMAC/IP)
+      // A validação básica do segredo na URL já é feita no controller antes de chamar este método.
+      // Se a validação mais robusta falhar AQUI dentro, logar o alerta de segurança e NÃO processar o payload.
+       const webhookSecret = this.configService.get<string>('EFI_WEBHOOK_SECRET'); // Exemplo de como obter o segredo, mas ele já veio validado no controller
+       // const rawBody = ... // Precisa ser obtido do Request no Controller e passado para cá
+       // const hmac = ... // Precisa ser obtido do Request no Controller e passado para cá
 
+        // TODO: Implementar validação de HMAC usando o rawBody e EFI_WEBHOOK_SECRET
+        // Consulte a documentação exata da Efí para a validação de HMAC do webhook.
+        // if (!this.isValidHmac(rawBody, hmac, webhookSecret)) {
+        //    this.logger.warn('Validação de HMAC do webhook falhou. Payload pode ser malicioso. Ignorando.');
+        //    return; // Ignora o payload inválido
+        // }
+        // TODO: Opcional: Validar IP de origem (req.ip) com lista de IPs da Efí.
 
       this.logger.log(`Webhook da Efí recebido. Processando payload...`);
 
 
+      // Assumindo, com base na doc "Recebendo Callbacks", que o payload é um ARRAY de eventos.
       if (!Array.isArray(efiPayload)) {
           this.logger.error('Payload do webhook da Efí não é um array inesperado.');
-           return;
+           return; // Retorne sem lançar erro HTTP, pois a Efí espera 200 OK
       }
 
       for (const event of efiPayload) {
-           const eventPix = event.pix;
+           // Lógica para processar PIX RECEBIDO (DEPÓSITO)
+           // Um webhook de PIX recebido (confirmando um depósito) deve ter e2eId, valor e txid no campo 'pix'.
+           const eventPixRecebido = (event as any).pix; // Acessa o campo 'pix' para webhooks de recebimento
 
-           // Lógica para processar PIX RECEBIDO (DEPÓSITO) - Identificado por ter e2eId e txid no 'pix'
-           if (eventPix && eventPix.e2eId && eventPix.valor !== undefined && eventPix.txid) {
-                const e2eId = eventPix.e2eId;
-                const amountReceived = parseFloat(eventPix.valor);
-                const txid = eventPix.txid;
+           if (eventPixRecebido && eventPixRecebido.e2eId && eventPixRecebido.valor !== undefined && eventPixRecebido.txid) {
+                const e2eId = eventPixRecebido.e2eId;
+                const amountReceived = parseFloat(eventPixRecebido.valor);
+                const txid = eventPixRecebido.txid;
 
                 if (isNaN(amountReceived)) {
-                    this.logger.error(`Webhook PIX recebido (E2EId ${e2eId}): Valor (${eventPix.valor}) inválido.`);
+                    this.logger.error(`Webhook PIX recebido (E2EId ${e2eId}): Valor (${eventPixRecebido.valor}) inválido.`);
                     continue;
                 }
 
@@ -420,74 +575,88 @@ export class EfiPixService {
                 let depositRecord: Deposit | null = null;
 
                 try {
+                    // Tentar encontrar o depósito correspondente pelo Txid ou E2EId
                     depositRecord = await this.depositModel.findOne({
                         where: {
                             [Op.or]: [
                                 { efiTxid: txid },
-                                { efiE2eId: e2eId },
+                                { efiE2eId: e2eId }, // Pode ser que o registro já tenha sido atualizado parcialmente
                             ],
+                            // Opcional: verificar se o valor bate para segurança. Cuidado com floats!
+                            // amount: amountReceived,
+                            // status: DepositStatus.PENDING // Apenas depósitos PENDING devem ser confirmados via PIX recebido
                         },
                         transaction,
-                        lock: transaction.LOCK.UPDATE,
+                        lock: transaction.LOCK.UPDATE, // Bloqueia a linha do depósito
                     });
 
                     if (!depositRecord) {
-                        this.logger.warn(`Webhook PIX recebido (E2EId ${e2eId}, Txid ${txid}): Depósito correspondente NÃO encontrado ou já processado.`);
-                        await transaction.commit();
+                        this.logger.warn(`Webhook PIX recebido (E2EId ${e2eId}, Txid ${txid}): Depósito correspondente NÃO encontrado ou já processado. Pode ser notificação duplicada ou PIX não iniciado pela app.`);
+                        await transaction.commit(); // Commit transação read-only
                         continue;
                     }
 
+                    // Se o depósito já estiver como PAID, é uma notificação duplicada
                     if (depositRecord.status === DepositStatus.PAID) {
                         this.logger.warn(`Webhook PIX recebido (E2EId ${e2eId}, Txid ${txid}): Depósito ${depositRecord.id} já está no status PAID.`);
                          await transaction.commit();
                          continue;
                     }
 
+                     // Validar o valor recebido com o valor do depósito
                      if (depositRecord.amount.toFixed(2) !== amountReceived.toFixed(2)) {
                          this.logger.error(`Webhook PIX recebido (E2EId ${e2eId}, Txid ${txid}): Discrepância de valor. Depósito ${depositRecord.id} esperado ${depositRecord.amount.toFixed(2)}, recebido ${amountReceived.toFixed(2)}. NÃO CREDITADO AUTOMATICAMENTE.`);
-                          await transaction.commit();
+                         // Marcar para revisão manual ou logar como falha. NÃO creditar saldo automaticamente.
+                         // Opcional: Atualizar status para algo como 'REVIEW_NEEDED'
+                         // await depositRecord.update({ status: 'REVIEW_NEEDED', efiE2eId: e2eId, efiWebhookPayload: event }, { transaction });
+                          await transaction.commit(); // Commit da atualização de status (se implementada)
                          continue;
                      }
 
+
+                    // Atualizar status para PAID e registrar E2EId final
+                     // Certifique-se que o campo efiWebhookPayload exista no seu modelo Deposit (removido do update temporariamente)
                     await depositRecord.update({
                         status: DepositStatus.PAID,
-                        efiE2eId: e2eId,
-                         // efiWebhookPayload: event, // Descomentar se o campo existir
+                        efiE2eId: e2eId, // Garante que o E2EId final esteja registrado
                     }, { transaction });
                     this.logger.log(`Registro de depósito ${depositRecord.id} atualizado para PAID. E2EId: ${e2eId}.`);
 
+
+                    // Creditar o saldo do usuário
                     await this.authService.updateUserBalance(depositRecord.userId, depositRecord.amount, transaction);
                     this.logger.log(`Saldo de R$ ${depositRecord.amount.toFixed(2)} creditado para o usuário ${depositRecord.userId} (Depósito ${depositRecord.id}).`);
 
+
+                    // Commit da transação local
                     await transaction.commit();
                     this.logger.log(`Processamento do webhook para depósito ${depositRecord.id} (E2EId ${e2eId}) concluído com sucesso.`);
 
                 } catch (error) {
+                    // Rollback da transação local em caso de erro no processamento deste evento
                      if (transaction && !(transaction as any).finished) {
                          await transaction.rollback();
                          this.logger.warn(`Rollback executado para processamento de webhook (Depósito, E2EId ${e2eId}) devido a erro.`);
                      }
+
+                    // Logar o erro e CONTINUAR processando outros eventos (se houver)
                     this.logger.error(
                         `Erro ao processar webhook para depósito (E2EId ${e2eId}, Txid ${txid}): ${(error as any).message}`,
                         (error as any).stack
                     );
-                }
+                    // Não lançar exceção HTTP aqui, pois a Efí espera 200 OK.
+                    // Um sistema mais avançado poderia ter um mecanismo de retentativa interna ou notificação de falha.
+                } // Fim do catch do evento de depósito
            }
-           // Lógica para processar ENVIO DE PIX (SAQUE) - Precisa confirmar o formato do webhook para saque.
-           // Pelo erro, a Efí notifica o status final do ENVIO de Pix pela chave do PAGADOR.
-           // O payload pode ser diferente do webhook de PIX RECEBIDO.
-           // PRECISAMOS DO FORMATO DO PAYLOAD DE WEBHOOK PARA ENVIO DE PIX DA EFÍ.
-           // Assumindo que pode vir um array de eventos, e cada evento de saque tenha algo como event.pixEnvio ou event.envioPixStatus
+           // Lógica para processar ENVIO DE PIX (SAQUE) - Notificações de status do Pix Enviado
+           // Assumindo que o payload para ENVIO (Saque) venha com um campo diferente, como 'gnPix' ou similar
            // E que contenha o idEnvio (nosso ID) e o status final.
+            const eventGnPixEnvio = (event as any).gnPix; // Ex: campo para eventos de envio
 
-            // EX: Se o payload de webhook de ENVIO for parecido com a consulta de ENVIO (/v2/gn/pix/enviados/id-envio/:idEnvio):
-            // efiPayload = [{ gnPix: { idEnvio: 'seu_id', status: 'CONCLUIDA', e2eId: 'e2e_final', ... } }]
-            const eventGnPix = (event as any).gnPix; // Tentativa de acessar o campo 'gnPix'
-
-            if (eventGnPix && eventGnPix.idEnvio && eventGnPix.status) {
-                 const idEnvio = eventGnPix.idEnvio; // Nosso efiIdEnvio (UUID sem hifens)
-                 const statusEfí = eventGnPix.status; // Ex: 'CONCLUIDA', 'EM_PROCESSAMENTO', 'NEGADA', 'ERRO'
-                 const e2eId = eventGnPix.e2eId; // E2EId final, se concluído
+            if (eventGnPixEnvio && eventGnPixEnvio.idEnvio && eventGnPixEnvio.status) {
+                 const idEnvio = eventGnPixEnvio.idEnvio; // Nosso efiIdEnvio (UUID sem hifens)
+                 const statusEfí = eventGnPixEnvio.status; // Ex: 'CONCLUIDA', 'EM_PROCESSAMENTO', 'NEGADA', 'ERRO'
+                 const e2eId = eventGnPixEnvio.e2eId; // E2EId final, se concluído
 
                  this.logger.log(`Processando Webhook ENVIO PIX: idEnvio ${idEnvio}, Status EFI: ${statusEfí}, E2EId: ${e2eId ?? 'N/A'}.`);
 
@@ -583,7 +752,7 @@ export class EfiPixService {
        this.logger.log('Processamento de webhook(s) da Efí finalizado.');
   }
 
-  // --- Métodos de Consulta (Opcional, para o Controller) ---
+  // --- Métodos de Consulta ---
    async getUserDeposits(userId: number): Promise<Deposit[]> {
        return this.depositModel.findAll({ where: { userId }, order: [['createdAt', 'DESC']] });
    }
@@ -608,13 +777,14 @@ export class EfiPixService {
         return withdrawal;
     }
 
-    // --- NOVO MÉTODO PARA CONFIGURAR O WEBHOOK NA EFÍ ---
+    // --- MÉTODO PARA CONFIGURAR O WEBHOOK NA EFÍ ---
+    // Endpoint de TESTE SEM SEGURANÇA!
     async configureEfiWebhook(): Promise<any> {
          this.logger.log('Solicitando configuração do webhook na API da Efí...');
 
          const pixKey = this.configService.get<string>('EFI_PIX_KEY');
          const webhookSecret = this.configService.get<string>('EFI_WEBHOOK_SECRET');
-         const publicHost = 'https://jackbear-lotoapi.r954jc.easypanel.host'; // HARDCODED - **Perigoso!**
+         const publicHost = 'https://jackbear-lotoapi.r954jc.easypanel.host'; // HARDCODED - **Perigoso! Mova para .env se persistir**
 
          if (!pixKey) {
               const msg = 'Chave Pix da Efí (EFI_PIX_KEY) não configurada no .env.';
@@ -628,14 +798,8 @@ export class EfiPixService {
          }
 
 
-         // Monta a URL completa do seu webhook (aquela que a Efí vai chamar)
-         // Inclui o segredo na URL.
-         // NOTA: A Efí adiciona '/pix' ao final do URL configurado. Sua rota no controller já lida com isso.
-         // Se você quiser usar HMAC na query param (mais seguro com skip-mTLS), a URL seria:
-         // const webhookUrl = `${publicHost}/pix/webhook/${webhookSecret}?hmac=placeholder`; // 'placeholder' é apenas para o formato da URL
-         // Mas para a maneira mais simples, sem HMAC na URL:
+         // Monta a URL completa do seu webhook que a Efí vai chamar
          const webhookUrlToEfí = `${publicHost}/pix/webhook/${webhookSecret}`;
-
 
          this.logger.debug(`Configurando webhook para a chave Pix: ${pixKey} com URL: ${webhookUrlToEfí}`);
 
@@ -647,21 +811,29 @@ export class EfiPixService {
          const extraConfig: AxiosRequestConfig = {
               headers: {
                    'x-skip-mtls-checking': 'true' // Indica à Efí para não validar mTLS no seu servidor
-              }
+              },
+               // Timeout para a requisição de configuração do webhook, se necessário
+              // timeout: 5000, // 5 segundos
          };
 
 
          try {
-              // Chamar a API da Efí (PUT /v2/webhook/:chave)
+              // Chamar a API da Efí (PUT /v2/webhook/:chave) usando o makeEfiRequest corrigido
              const efiResponse = await this.makeEfiRequest('put', `/v2/webhook/${pixKey}`, requestBody, extraConfig);
 
              this.logger.log(`Configuração do webhook na Efí solicitada com sucesso. Resposta: ${JSON.stringify(efiResponse)}`);
              return efiResponse; // Retorna a resposta da Efí
 
-         } catch (error) {
-              this.logger.error(`Falha ao configurar webhook na Efí para a chave ${pixKey}: ${(error as any).message}`, (error as any).stack);
-              // Propaga o erro, o controller que chamar lidará com a resposta para o usuário
-              throw new InternalServerErrorException(`Falha ao configurar webhook na Efí: ${((error as any).response?.data?.mensagem || (error as any).message)}`);
+         } catch (error: any) {
+              // O interceptor já logou o erro detalhado e mapeou alguns erros para NestJS Exceptions.
+              // Se o erro tiver a flag 'isEfiError', é um erro da Efí já tratado no interceptor.
+             if ((error as any).isEfiError) {
+                  // Relança a NestJS Exception criada no interceptor
+                  throw error;
+             }
+             // Se for outro erro inesperado, lança um InternalServerError genérico
+             this.logger.error(`Erro inesperado ao configurar webhook na Efí para a chave ${pixKey}: ${error.message}`, error.stack);
+             throw new InternalServerErrorException(`Falha ao configurar webhook na Efí: ${error.message}`);
          }
     }
     // --- Fim NOVO MÉTODO ---
