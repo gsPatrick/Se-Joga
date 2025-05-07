@@ -51,19 +51,22 @@ export class EfiPixService {
             // Em um cenário real, você pode querer lançar um erro fatal na inicialização aqui
       }
 
+      // Configura o agente HTTPS com certificado SE ele existir e for válido
+      const certHttpsAgent = certExists ? new https.Agent({
+          pfx: fs.readFileSync(resolvedCertPath),
+          passphrase: certPassword,
+          // Opcional: Adicionar outras configurações TLS aqui se necessário,
+          // como ca, ciphers, secureOptions, rejectUnauthorized (false para pular validacao do CA da Efí - NAO RECOMENDADO!)
+          // rejectUnauthorized: false // APENAS PARA TESTES DE DEBUG - PERIGOSO EM PROD!
+      }) : undefined;
+
 
       this.efipayApi = axios.create({
           baseURL: efiBaseUrl,
-          // REMOVENDO HEADERS PADRÃO DA INSTÂNCIA AQUI
-          // headers: {
-          //     'Content-Type': 'application/json',
-          //     'Accept': 'application/json',
-          // },
-          httpsAgent: certExists ? new https.Agent({ // Configurar HTTPS com certificado SOMENTE se o caminho for fornecido E o arquivo existir
-               pfx: fs.readFileSync(resolvedCertPath), // Carrega o certificado P12/PFX
-               passphrase: certPassword, // Senha do certificado
-          }) : undefined, // Use undefined se não houver certPath ou o arquivo não existir
-           // Desabilitar redirect para controlar melhor
+          // REMOVENDO HEADERS PADRÃO DA INSTÂNCIA AQUI para definir explicitamente no makeEfiRequest
+          // headers: { ... },
+          // ATRIBUI O AGENTE HTTPS AQUI - ISTO AFETA TODAS AS REQUISIÇÕES FEITAS PELA INSTÂNCIA efipayApi
+          httpsAgent: certHttpsAgent,
           maxRedirects: 0,
           // Opcional: aumentar timeout para requisições de API se a rede for lenta
           // timeout: 10000, // 10 segundos
@@ -123,16 +126,19 @@ export class EfiPixService {
 
              } else if (error.request) {
                  this.logger.error(`Erro da EFI (Requisição): Sem resposta recebida - ${error.message} - ${error.config?.method?.toUpperCase()} ${error.config?.url}`);
+                  // Se o erro for "socket hang up" ou outro erro de rede/TLS sem resposta HTTP
+                  // Adiciona uma flag para indicar erro de rede/TLS
+                  (error as any).isNetworkOrTlsError = true;
              } else {
                  this.logger.error(`Erro da EFI (Setup): Erro ao configurar requisição - ${error.message}`);
              }
-              // Para erros de rede ou outros não tratados acima, re-lança o erro original
+              // Re-lança o erro original
              return Promise.reject(error);
        });
   }
 
 
-    // --- Método para obter/gerenciar o token de acesso (SEM USO DE makeEfiRequest) ---
+    // --- Método para obter/gerenciar o token de acesso (FAZ A REQUISIÇÃO DIRETA) ---
     private async getAccessToken(): Promise<string> {
         if (this.accessToken && this.tokenExpiry && this.tokenExpiry > new Date(Date.now() + 5 * 60 * 1000)) {
             this.logger.debug('Utilizando token da Efí em cache.');
@@ -152,18 +158,17 @@ export class EfiPixService {
         const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
         try {
-            // FAZ A REQUISIÇÃO DIRETA COM AXIOS INSTANCE (SEM makeEfiRequest)
+            // FAZ A REQUISIÇÃO DIRETA COM AXIOS INSTANCE
             const response = await this.efipayApi.post('/oauth/token', {
                 grant_type: 'client_credentials',
             }, {
-                 // Headers de Basic Auth específicos para esta requisição
-                 // Define headers COMPLETAMENTE aqui, sem depender dos da instância Axios
+                 // Define headers COMPLETAMENTE aqui para a requisição de token
                 headers: {
                     'Authorization': `Basic ${basicAuth}`,
                     'Content-Type': 'application/json',
                     'Accept': 'application/json',
                 },
-                // O certificado já está configurado na instância axios (via httpsAgent)
+                // O httpsAgent da instância axios (configurado em configureAxiosInstance) será usado para a conexão TLS.
             });
 
             const { access_token, expires_in } = response.data;
@@ -179,25 +184,29 @@ export class EfiPixService {
             this.logger.log('Novo token da Efí obtido com sucesso.');
             return this.accessToken!;
         } catch (error: any) {
-            // O log detalhado já é feito pelo interceptor.
-             // Mapear erros específicos do endpoint /oauth/token se necessário,
-             // mas o interceptor já trata 401, 400, etc.
+             // O interceptor já logou o erro.
+             // Se o interceptor marcou como erro de rede/TLS:
+             if ((error as any).isNetworkOrTlsError) {
+                 this.logger.error(`Erro de rede/TLS ao obter token da Efí. Verifique certificado, senha, caminho e firewall.`);
+                 throw new InternalServerErrorException('Falha de conexão segura ao obter token da Efí. Verifique a configuração do certificado.');
+             }
+             // Se for erro HTTP mapeado ou outro
             throw error; // Re-lança o erro já tratado (ou não) pelo interceptor
         }
     }
 
     // --- Método auxiliar para fazer requisições autenticadas ---
-    // Aceita extraConfig, incluindo headers, e garante que Authorization Bearer seja prioritário
+    // Aceita extraConfig, incluindo headers. Define headers básicos (Content-Type, Accept)
+    // e mescla com extraConfig.headers (incluindo Authorization Bearer).
     private async makeEfiRequest(method: 'get' | 'post' | 'put' | 'patch' | 'delete', url: string, data?: any, extraConfig?: AxiosRequestConfig): Promise<any> {
-         // NOTA: A autenticação Bearer AGORA é tratada EXPLICITAMENTE ao chamar este método,
-         // passando o token no extraConfig.headers.Authorization.
-         // getAccessToken() AINDA é usado para garantir que o token está disponível,
-         // mas o token em si precisa ser obtido *antes* de chamar este método e passado no extraConfig.
-         // Este método NÃO chama getAccessToken() internamente para obter o token.
+         // NOTA: A autenticação Bearer DEVE SER PASSADA EXPLICITAMENTE ao chamar este método,
+         // no extraConfig.headers.Authorization.
+         // getAccessToken() é usado para garantir que o token está disponível e pode ser obtido
+         // pelo chamador *antes* de chamar este método.
 
         try {
              // Cria o objeto de headers para esta requisição
-             // Define Content-Type e Accept explicitamente AQUI também
+             // Define Content-Type e Accept explicitamente AQUI e mescla com extraConfig.headers
              const requestHeaders: RawAxiosRequestHeaders = {
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
@@ -205,20 +214,26 @@ export class EfiPixService {
                 ...(extraConfig?.headers as RawAxiosRequestHeaders || {}),
              };
 
-             // Remove headers do extraConfig para evitar duplicação/confusão na mescla com requestHeaders
+             // Remove headers do extraConfig para evitar duplicação/confusão
              const configWithoutHeaders = {...extraConfig, headers: undefined} as Omit<AxiosRequestConfig, 'headers'>;
 
+             // Faz a requisição usando a instância axios configurada
             const response = await this.efipayApi({
                 method,
                 url,
                 data,
-                headers: requestHeaders, // Usa os headers definidos aqui
+                headers: requestHeaders, // Usa os headers definidos aqui (incluindo Authorization se foi passado no extraConfig)
                 ...configWithoutHeaders // Mescla outras configs
             });
             return response.data; // Retorna apenas a parte 'data' da resposta
         } catch (error: any) {
              // O interceptor já logou o erro e mapeou alguns para NestJS Exceptions.
-             // Re-lançar o erro para ser tratado pelo código chamador.
+             // Se o interceptor marcou como erro de rede/TLS:
+              if ((error as any).isNetworkOrTlsError) {
+                 this.logger.error(`Erro de rede/TLS durante makeEfiRequest para ${method} ${url}.`);
+                 throw new InternalServerErrorException('Falha de conexão segura com a API da Efí.');
+             }
+             // Re-lançar o error
              throw error;
         }
     }
@@ -350,6 +365,12 @@ export class EfiPixService {
         if (error instanceof InternalServerErrorException && error.message.includes('EFI_PIX_KEY')) {
             throw error; // Re-lançar o erro específico da configuração
         }
+         // Se for um erro de rede/TLS tratado pelo interceptor
+        if ((error as any).isNetworkOrTlsError) {
+            // O log e a mensagem já foram tratados no interceptor/getAccessToken/makeEfiRequest
+            throw error; // Re-lança o erro tratado
+        }
+
 
         // Para quaisquer outros erros não mapeados (ex: erro na criação do registro no DB antes do commit, erro de rede não tratado pelo interceptor, etc.)
         this.logger.error(`Erro inesperado ao criar cobrança de depósito para usuário ${userId}: ${(error as any).message}`, (error as any).stack);
@@ -504,12 +525,17 @@ export class EfiPixService {
                     this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED após erro na requisição Efí: ${(updateError as any).message}`);
                  }
              }
-             throw error; // Re-lança o erro mapeado pelo interceptor
+             throw error; // Re-lança o error mapeado pelo interceptor
          }
          // Se o erro for o InternalServerErrorException que lançamos por falta da chave:
          if (error instanceof InternalServerErrorException && error.message.includes('Chave Pix da conta pagadora')) {
-             throw error; // Re-lançar o erro específico da configuração
+             throw error; // Re-lança o erro específico da configuração
          }
+         // Se for um erro de rede/TLS tratado pelo interceptor
+        if ((error as any).isNetworkOrTlsError) {
+            // O log e a mensagem já foram tratados no interceptor/getAccessToken/makeEfiRequest
+            throw error; // Re-lança o erro tratado
+        }
 
 
          // Para quaisquer outros erros não mapeados
@@ -841,6 +867,11 @@ export class EfiPixService {
                   // Relança a NestJS Exception criada no interceptor
                   throw error;
              }
+             // Se for um erro de rede/TLS tratado pelo interceptor
+            if ((error as any).isNetworkOrTlsError) {
+                // O log e a mensagem já foram tratados no interceptor/getAccessToken/makeEfiRequest
+                throw error; // Re-lança o erro tratado
+            }
              // Se for outro erro inesperado, loga e lança um InternalServerError genérico
              this.logger.error(`Erro inesperado ao configurar webhook na Efí para a chave ${pixKey}: ${error.message}`, error.stack);
              throw new InternalServerErrorException(`Falha ao configurar webhook na Efí: ${error.message}`);
