@@ -116,23 +116,23 @@ export class EfiPixService {
                        // Erros 409 indicam conflito (Conflict)
                        throw new ConflictException(error.response.data);
                    }
-                   // Para outros 4xx ou 5xx, pode lançar InternalServerError ou re-lançar o erro original
+                   // Para outros 4xx ou 5xx, pode lançar InternalServerError ou re-lançar o error original
                    if (error.response.status >= 400) {
-                        // Adiciona um flag para indicar que é um erro da Efí
+                        // Adiciona um flag para indicar que é um error da Efí
                          (error as any).isEfiError = true;
-                         // Re-lança o erro original com o flag
+                         // Re-lança o error original com o flag
                          return Promise.reject(error); // Permite que o catcher capture e decida se lança NestJS exception
                    }
 
              } else if (error.request) {
                  this.logger.error(`Erro da EFI (Requisição): Sem resposta recebida - ${error.message} - ${error.config?.method?.toUpperCase()} ${error.config?.url}`);
-                  // Se o erro for "socket hang up" ou outro erro de rede/TLS sem resposta HTTP
-                  // Adiciona uma flag para indicar erro de rede/TLS
+                  // Se o error for "socket hang up" ou outro error de rede/TLS sem resposta HTTP
+                  // Adiciona uma flag para indicar error de rede/TLS
                   (error as any).isNetworkOrTlsError = true;
              } else {
-                 this.logger.error(`Erro da EFI (Setup): Erro ao configurar requisição - ${error.message}`);
+                 this.logger.error(`Erro da EFI (Setup): Error ao configurar requisição - ${error.message}`);
              }
-              // Re-lança o erro original
+              // Re-lança o error original
              return Promise.reject(error);
        });
   }
@@ -184,14 +184,14 @@ export class EfiPixService {
             this.logger.log('Novo token da Efí obtido com sucesso.');
             return this.accessToken!;
         } catch (error: any) {
-             // O interceptor já logou o erro.
-             // Se o interceptor marcou como erro de rede/TLS:
+             // O interceptor já logou o error.
+             // Se o interceptor marcou como error de rede/TLS:
              if ((error as any).isNetworkOrTlsError) {
-                 this.logger.error(`Erro de rede/TLS ao obter token da Efí. Verifique certificado, senha, caminho e firewall.`);
+                 this.logger.error(`Error de rede/TLS ao obter token da Efí. Verifique certificado, senha, caminho e firewall.`);
                  throw new InternalServerErrorException('Falha de conexão segura ao obter token da Efí. Verifique a configuração do certificado.');
              }
-             // Se for erro HTTP mapeado ou outro
-            throw error; // Re-lança o erro já tratado (ou não) pelo interceptor
+             // Se for error HTTP mapeado ou outro
+            throw error; // Re-lança o error já tratado (ou não) pelo interceptor
         }
     }
 
@@ -202,7 +202,8 @@ export class EfiPixService {
          // NOTA: A autenticação Bearer DEVE SER PASSADA EXPLICITAMENTE ao chamar este método,
          // no extraConfig.headers.Authorization.
          // getAccessToken() é usado para garantir que o token está disponível e pode ser obtido
-         // pelo chamador *antes* de chamar este método.
+         // pelo chamador *antes* de chamar este método e passado no extraConfig.
+         // Este método NÃO chama getAccessToken() internamente para obter o token.
 
         try {
              // Cria o objeto de headers para esta requisição
@@ -227,13 +228,13 @@ export class EfiPixService {
             });
             return response.data; // Retorna apenas a parte 'data' da resposta
         } catch (error: any) {
-             // O interceptor já logou o erro e mapeou alguns para NestJS Exceptions.
-             // Se o interceptor marcou como erro de rede/TLS:
+             // O interceptor já logou o error e mapeou alguns para NestJS Exceptions.
+             // Se o interceptor marcou como error de rede/TLS:
               if ((error as any).isNetworkOrTlsError) {
-                 this.logger.error(`Erro de rede/TLS durante makeEfiRequest para ${method} ${url}.`);
+                 this.logger.error(`Error de rede/TLS durante makeEfiRequest para ${method} ${url}.`);
                  throw new InternalServerErrorException('Falha de conexão segura com a API da Efí.');
              }
-             // Re-lançar o error
+             // Re-lança o error
              throw error;
         }
     }
@@ -265,7 +266,7 @@ export class EfiPixService {
 
          const efiPixKey = this.configService.get<string>('EFI_PIX_KEY');
          if (!efiPixKey) {
-              const errorMessage = 'Chave Pix de recebimento (EFI_PIX_KEY) não configurada no .env. Não é possível criar cobrança.';
+              const errorMessage = 'Chave Pix de recebimento (EFI_PIX_KEY) não configurada no .env.';
               this.logger.error(errorMessage);
              throw new InternalServerErrorException(errorMessage);
          }
@@ -306,7 +307,7 @@ export class EfiPixService {
         if (!efiResponse || !efiResponse.txid || !efiResponse.pixCopiaECola || !efiResponse.loc?.location) {
             const errorMessage = 'Resposta inesperada da Efí ao criar cobrança: dados de retorno incompletos (txid, pixCopiaECola, location).';
              this.logger.error(`${errorMessage} Resposta completa: ${JSON.stringify(efiResponse)}`);
-             // Lançar erro mapeado no interceptor ou InternalServerError aqui
+             // Lançar error mapeado no interceptor ou InternalServerError aqui
             throw new InternalServerErrorException(errorMessage);
         }
 
@@ -331,19 +332,19 @@ export class EfiPixService {
         return depositRecord;
 
     } catch (error) {
-        // Rollback da transação local em caso de erro
+        // Rollback da transação local em caso de error
          if (transaction && !(transaction as any).finished) {
              try {
                  await transaction.rollback();
-                 this.logger.warn(`Rollback executado para criação de depósito do usuário ${userId} devido a erro capturado.`);
+                 this.logger.warn(`Rollback executado para criação de depósito do usuário ${userId} devido a error capturado.`);
              } catch (rollbackError: any) {
                   if (!rollbackError.message?.includes('already')) {
-                    this.logger.error(`Erro ao tentar executar rollback no CATCH para criação de depósito do usuário ${userId}: ${rollbackError}`);
+                    this.logger.error(`Error ao tentar executar rollback no CATCH para criação de depósito do usuário ${userId}: ${rollbackError}`);
                  }
              }
          }
 
-         // Se o registro foi criado antes de falhar na chamada da API, marcar como falho (se possível)
+         // Se o registro foi criado antes de falhar na chamada da API, marcá-lo como falho (se possível)
          // Isso é feito fora da transação original que falhou.
          if (depositRecord && depositRecord.id && depositRecord.status === DepositStatus.PENDING) {
             try {
@@ -356,25 +357,25 @@ export class EfiPixService {
             }
          }
 
-        // Propagar o erro. O interceptor já logou erros da Efí e mapeou alguns.
-        // Se o erro já é uma NestJS Exception mapeada pelo interceptor:
+        // Propagar o error. O interceptor já logou errors da Efí e mapeou alguns.
+        // Se o error já é uma NestJS Exception mapeada pelo interceptor:
         if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof UnauthorizedException || error instanceof ConflictException) {
             throw error; // Relançar exceções NestJS mapeadas
         }
          // Se for o InternalServerErrorException que lançamos por falta da chave:
         if (error instanceof InternalServerErrorException && error.message.includes('EFI_PIX_KEY')) {
-            throw error; // Re-lançar o erro específico da configuração
+            throw error; // Relançar o error específico da configuração
         }
-         // Se for um erro de rede/TLS tratado pelo interceptor
+         // Se for um error de rede/TLS tratado pelo interceptor
         if ((error as any).isNetworkOrTlsError) {
             // O log e a mensagem já foram tratados no interceptor/getAccessToken/makeEfiRequest
-            throw error; // Re-lança o erro tratado
+            throw error; // Re-lança o error tratado
         }
 
 
-        // Para quaisquer outros erros não mapeados (ex: erro na criação do registro no DB antes do commit, erro de rede não tratado pelo interceptor, etc.)
-        this.logger.error(`Erro inesperado ao criar cobrança de depósito para usuário ${userId}: ${(error as any).message}`, (error as any).stack);
-        throw new InternalServerErrorException('Erro interno ao solicitar depósito.');
+        // Para quaisquer outros errors não mapeados (ex: error na criação do registro no DB antes do commit, error de rede não tratado pelo interceptor, etc.)
+        this.logger.error(`Error inesperado ao criar cobrança de depósito para usuário ${userId}: ${(error as any).message}`, (error as any).stack);
+        throw new InternalServerErrorException('Error interno ao solicitar depósito.');
     }
 }
 
@@ -478,19 +479,19 @@ export class EfiPixService {
         return withdrawalRecord;
 
     } catch (error) {
-        // Rollback da transação local em caso de erro
+        // Rollback da transação local em caso de error
          if (transaction && !(transaction as any).finished) {
              try {
                  await transaction.rollback();
-                 this.logger.warn(`Rollback executado para solicitação de saque do usuário ${userId} devido a erro capturado.`);
+                 this.logger.warn(`Rollback executado para solicitação de saque do usuário ${userId} devido a error capturado.`);
              } catch (rollbackError: any) {
                   if (!rollbackError.message?.includes('already')) {
-                    this.logger.error(`Erro ao tentar executar rollback no CATCH para solicitação de saque do usuário ${userId}: ${rollbackError}`);
+                    this.logger.error(`Error ao tentar executar rollback no CATCH para solicitação de saque do usuário ${userId}: ${rollbackError}`);
                  }
              }
          }
 
-         // Tratar erros específicos do updateUserBalance (saldo insuficiente)
+         // Tratar errors específicos do updateUserBalance (saldo insuficiente)
          if (error instanceof Error && ((error as any).isHandled)) { // Verifica a flag .isHandled adicionada pelo AuthService
               // Se o registro de saque foi criado antes de falhar no débito de saldo (o que não deve acontecer com a ordem na transação,
               // mas como fallback) ou na chamada da Efí, marcar como FAILED.
@@ -499,20 +500,20 @@ export class EfiPixService {
                     const updateTransaction = await this.sequelize.transaction();
                     await withdrawalRecord.update({ status: WithdrawalStatus.FAILED }, { transaction: updateTransaction });
                     await updateTransaction.commit();
-                     this.logger.error(`Registro de saque ${withdrawalRecord.id} marcado como FAILED (após rollback) devido a erro de saldo.`);
+                     this.logger.error(`Registro de saque ${withdrawalRecord.id} marcado como FAILED (após rollback) devido a error de saldo.`);
                  } catch (updateError) {
-                    this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED após erro de saldo: ${(updateError as any).message}`);
+                    this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED após error de saldo: ${(updateError as any).message}`);
                  }
              }
-              // Se o erro for o de saldo insuficiente do AuthService, lança BadRequest
+              // Se o error for o de saldo insuficiente do AuthService, lança BadRequest
              if (error.message.includes('Saldo insuficiente')) {
                 throw new BadRequestException('Saldo insuficiente para concluir o saque.');
              }
-             // Se for outro erro .isHandled, pode ser um erro interno do AuthService
-              throw new InternalServerErrorException(`Erro na operação de saldo durante o saque: ${error.message}`);
+             // Se for outro error .isHandled, pode ser um error interno do AuthService
+              throw new InternalServerErrorException(`Error na operação de saldo durante o saque: ${error.message}`);
          }
 
-         // Tratar erros da chamada makeEfiRequest (que já foram logados e mapeados no interceptor)
+         // Tratar errors da chamada makeEfiRequest (que já foram logados e mapeados no interceptor)
          if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof UnauthorizedException || error instanceof ConflictException) {
               // Se o registro de saque foi criado antes de falhar na chamada da Efí, marcar como FAILED.
               if (withdrawalRecord && withdrawalRecord.id && withdrawalRecord.status === WithdrawalStatus.PROCESSING) {
@@ -520,38 +521,38 @@ export class EfiPixService {
                     const updateTransaction = await this.sequelize.transaction();
                     await withdrawalRecord.update({ status: WithdrawalStatus.FAILED }, { transaction: updateTransaction });
                     await updateTransaction.commit();
-                     this.logger.error(`Registro de saque ${withdrawalRecord.id} marcado como FAILED (após rollback) devido a erro na requisição Efí.`);
+                     this.logger.error(`Registro de saque ${withdrawalRecord.id} marcado como FAILED (após rollback) devido a error na requisição Efí.`);
                  } catch (updateError) {
-                    this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED após erro na requisição Efí: ${(updateError as any).message}`);
+                    this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED após error na requisição Efí: ${(updateError as any).message}`);
                  }
              }
              throw error; // Re-lança o error mapeado pelo interceptor
          }
-         // Se o erro for o InternalServerErrorException que lançamos por falta da chave:
+         // Se o error for o InternalServerErrorException que lançamos por falta da chave:
          if (error instanceof InternalServerErrorException && error.message.includes('Chave Pix da conta pagadora')) {
-             throw error; // Re-lança o erro específico da configuração
+             throw error; // Re-lança o error específico da configuração
          }
-         // Se for um erro de rede/TLS tratado pelo interceptor
+         // Se for um error de rede/TLS tratado pelo interceptor
         if ((error as any).isNetworkOrTlsError) {
             // O log e a mensagem já foram tratados no interceptor/getAccessToken/makeEfiRequest
-            throw error; // Re-lança o erro tratado
+            throw error; // Re-lança o error tratado
         }
 
 
-         // Para quaisquer outros erros não mapeados
-         this.logger.error(`Erro inesperado ao solicitar saque para usuário ${userId}: ${(error as any).message}`, (error as any).stack);
+         // Para quaisquer outros errors não mapeados
+         this.logger.error(`Error inesperado ao solicitar saque para usuário ${userId}: ${(error as any).message}`, (error as any).stack);
          // Tentar marcar o registro de saque como FAILED se ele existe e está como PROCESSING
          if (withdrawalRecord && withdrawalRecord.id && withdrawalRecord.status === WithdrawalStatus.PROCESSING) {
             try {
                const updateTransaction = await this.sequelize.transaction();
                await withdrawalRecord.update({ status: WithdrawalStatus.FAILED }, { transaction: updateTransaction });
                await updateTransaction.commit();
-                this.logger.error(`Registro de saque ${withdrawalRecord.id} marcado como FAILED (após rollback) devido a erro inesperado.`);
+                this.logger.error(`Registro de saque ${withdrawalRecord.id} marcado como FAILED (após rollback) devido a error inesperado.`);
             } catch (updateError) {
-               this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED após erro inesperado: ${(updateError as any).message}`);
+               this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED após error inesperado: ${(updateError as any).message}`);
             }
         }
-        throw new InternalServerErrorException('Erro interno ao solicitar saque.');
+        throw new InternalServerErrorException('Error interno ao solicitar saque.');
     }
 }
 
@@ -582,7 +583,7 @@ export class EfiPixService {
       // Assumindo, com base na doc "Recebendo Callbacks", que o payload é um ARRAY de eventos.
       if (!Array.isArray(efiPayload)) {
           this.logger.error('Payload do webhook da Efí não é um array inesperado.');
-           return; // Retorne sem lançar erro HTTP, pois a Efí espera 200 OK
+           return; // Retorne sem lançar error HTTP, pois a Efí espera 200 OK
       }
 
       for (const event of efiPayload) {
@@ -664,15 +665,15 @@ export class EfiPixService {
                     this.logger.log(`Processamento do webhook para depósito ${depositRecord.id} (E2EId ${e2eId}) concluído com sucesso.`);
 
                 } catch (error) {
-                    // Rollback da transação local em caso de erro no processamento deste evento
+                    // Rollback da transação local em caso de error no processamento deste evento
                      if (transaction && !(transaction as any).finished) {
                          await transaction.rollback();
-                         this.logger.warn(`Rollback executado para processamento de webhook (Depósito, E2EId ${e2eId}) devido a erro.`);
+                         this.logger.warn(`Rollback executado para processamento de webhook (Depósito, E2EId ${e2eId}) devido a error.`);
                      }
 
-                    // Logar o erro e CONTINUAR processando outros eventos (se houver)
+                    // Logar o error e CONTINUAR processando outros eventos (se houver)
                     this.logger.error(
-                        `Erro ao processar webhook para depósito (E2EId ${e2eId}, Txid ${txid}): ${(error as any).message}`,
+                        `Error ao processar webhook para depósito (E2EId ${e2eId}, Txid ${txid}): ${(error as any).message}`,
                         (error as any).stack
                     );
                     // Não lançar exceção HTTP aqui, pois a Efí espera 200 OK.
@@ -765,10 +766,10 @@ export class EfiPixService {
                  } catch (error) {
                      if (transaction && !(transaction as any).finished) {
                          await transaction.rollback();
-                         this.logger.warn(`Rollback executado para processamento de webhook (Saque, idEnvio ${idEnvio}) devido a erro.`);
+                         this.logger.warn(`Rollback executado para processamento de webhook (Saque, idEnvio ${idEnvio}) devido a error.`);
                      }
                      this.logger.error(
-                         `Erro ao processar webhook para saque (idEnvio ${idEnvio}): ${(error as any).message}`,
+                         `Error ao processar webhook para saque (idEnvio ${idEnvio}): ${(error as any).message}`,
                          (error as any).stack
                      );
                  }
@@ -861,19 +862,19 @@ export class EfiPixService {
              return efiResponse; // Retorna a resposta da Efí
 
          } catch (error: any) {
-              // O interceptor já logou o erro detalhado e mapeou alguns erros para NestJS Exceptions.
-              // Se o erro tiver a flag 'isEfiError', é um erro da Efí já tratado no interceptor.
+              // O interceptor já logou o error detalhado e mapeou alguns errors para NestJS Exceptions.
+              // Se o error tiver a flag 'isEfiError', é um error da Efí já tratado no interceptor.
              if ((error as any).isEfiError) {
                   // Relança a NestJS Exception criada no interceptor
                   throw error;
              }
-             // Se for um erro de rede/TLS tratado pelo interceptor
+             // Se for um error de rede/TLS tratado pelo interceptor
             if ((error as any).isNetworkOrTlsError) {
                 // O log e a mensagem já foram tratados no interceptor/getAccessToken/makeEfiRequest
-                throw error; // Re-lança o erro tratado
+                throw error; // Re-lança o error tratado
             }
-             // Se for outro erro inesperado, loga e lança um InternalServerError genérico
-             this.logger.error(`Erro inesperado ao configurar webhook na Efí para a chave ${pixKey}: ${error.message}`, error.stack);
+             // Se for outro error inesperado, loga e lança um InternalServerError genérico
+             this.logger.error(`Error inesperado ao configurar webhook na Efí para a chave ${pixKey}: ${error.message}`, error.stack);
              throw new InternalServerErrorException(`Falha ao configurar webhook na Efí: ${error.message}`);
          }
     }
