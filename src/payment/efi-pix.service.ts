@@ -36,7 +36,7 @@ export class EfiPixService {
   private configureAxiosInstance() {
       const certPath = this.configService.get<string>('EFI_CERT_PATH');
       const certPassword = this.configService.get<string>('EFI_CERT_PASSWORD') || '';
-      const efiBaseUrl = this.configService.get<string>('EFI_BASE_URL') || 'https://pix-h.api.efipay.com.br';
+      const efiBaseUrl = this.configService.get<string>('EFI_BASE_URL') || 'https://pix.api.efipay.com.br';
 
       // Verifica se o certificado existe ANTES de criar o httpsAgent
       const resolvedCertPath = path.resolve(certPath || ''); // Resolve mesmo que certPath seja undefined/vazio
