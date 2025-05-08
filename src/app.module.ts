@@ -75,16 +75,22 @@ import { PaymentModule } from './payment/payment.module';
       useFactory: async (configService: ConfigService) => { // Mantenha ConfigService injetado
         console.log("***** SEQUELIZE CONFIGURATION FACTORY IS RUNNING! *****");
 
-        // *** ADVERTÊNCIA EXTREMA: CREDENCIAIS HARDCODED ***
-        // ISTO É APENAS PARA FACILITAR TESTES INICIAIS EM AMBIENTES DEV ISOLADOS.
-        // NUNCA USE CREDENCIAIS DIRETAMENTE NO CÓDIGO EM PRODUÇÃO!
-        // USE configService.get<string>('DB_HOST') etc. em produção.
-        const dbHost = 'jackbear_sejoga'; // Use configService.get('DB_HOST') em produção!
-        const dbPort = 5432;             // Use configService.get('DB_PORT') em produção!
-        const dbUser = 'seJoga';         // Use configService.get('DB_USER') em produção!
-        const dbPassword = 'seJoga';     // Use configService.get('DB_PASSWORD') em produção!
-        const dbName = 'seJoga';         // Use configService.get('DB_NAME') em produção!
-        // *** FIM DA ADVERTÊNCIA EXTREMA ***
+        // *** ADVERTÊNCIA EXTREMA: CREDENCIAIS HARDCODED FOI REMOVIDO DAQUI ***
+        // AGORA ESTAMOS RECUPERANDO AS CREDENCIAIS DO ConfigService
+        // Isso pressupõe que você tem variáveis de ambiente definidas (ex: .env)
+        // com nomes como DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME.
+
+        const dbHost = configService.get<string>('DB_HOST');
+        // Use um valor padrão ou lance um erro se a porta não estiver definida ou não for um número válido
+        const dbPort = parseInt(configService.get<string>('DB_PORT') || '5432', 10);
+        const dbUser = configService.get<string>('DB_USER');
+        const dbPassword = configService.get<string>('DB_PASSWORD');
+        const dbName = configService.get<string>('DB_NAME');
+
+        // Opcional: Verificação básica para garantir que as variáveis foram carregadas
+        if (!dbHost || isNaN(dbPort) || !dbUser || !dbPassword || !dbName) {
+          throw new Error('Database credentials (DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME) are not fully configured in environment variables.');
+        }
 
 
         // Lista de modelos completa incluindo os novos modelos de Pagamento
@@ -104,23 +110,23 @@ import { PaymentModule } from './payment/payment.module';
 
         // --- Configuração para Sincronização Automática COM FORCE TRUE (Altamente Perigoso em Produção!) ---
         console.warn(`
-        **********************************************************************
-        *  [DB Setup - **DESTRUTIVO!**] synchronize: true e FORCE: true!     *
-        *  ISSO VAI DELETAR TODOS OS DADOS E TABELAS E RECRIA-LOS!           *
-        *  Use APENAS EM AMBIENTES DE DESENVOLVIMENTO ISOLADOS OU PARA       *
-        *  CRIAR A ESTRUTURA INICIAL EM UM BANCO DE DADOS VAZIO EM DEV.      *
-        *  **NUNCA, JAMAIS USE EM PRODUÇÃO!** Use migrações!                 *
-        *  RISCO GRAVÍSSIMO E CERTO DE PERDA DE DADOS!                       *
-        **********************************************************************
+**********************************************************************
+*  [DB Setup - **DESTRUTIVO!**] synchronize: true e FORCE: true!     *
+*  ISSO VAI DELETAR TODOS OS DADOS E TABELAS E RECRIA-LOS!           *
+*  Use APENAS EM AMBIENTES DE DESENVOLVIMENTO ISOLADOS OU PARA       *
+*  CRIAR A ESTRUTURA INICIAL EM UM BANCO DE DADOS VAZIO EM DEV.      *
+*  **NUNCA, JAMAIS USE EM PRODUÇÃO!** Use migrações!                 *
+*  RISCO GRAVÍSSIMO E CERTO DE PERDA DE DADOS!                       *
+**********************************************************************
         `);
 
         return {
           dialect: 'postgres',
-          host: dbHost,
-          port: dbPort,
-          username: dbUser,
-          password: dbPassword,
-          database: dbName,
+          host: dbHost, // Agora usando a variável recuperada
+          port: dbPort, // Agora usando a variável recuperada
+          username: dbUser, // Agora usando a variável recuperada
+          password: dbPassword, // Agora usando a variável recuperada
+          database: dbName, // Agora usando a variável recuperada
           dialectOptions: {
             ssl: false, // SSL DESATIVADO (conforme seu código original)
             schema: 'public', // Força usar o schema "public" (conforme seu código original)
