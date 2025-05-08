@@ -12,29 +12,28 @@ import {
     InternalServerErrorException,
     UnauthorizedException,
     Logger,
-    // CORRIGIDO: Importar Put
     Put,
     Patch,
-    Req // Importar Req
+    Req
   } from '@nestjs/common';
   import { AuthGuard } from '@nestjs/passport';
   import { AuthUser } from '../Auth/decorators/auth-user.decorator';
   import { User } from '../models/user/user.model';
-  import { EfiPixService } from './efi-pix.service';
+  // Importar a classe EfiPixService
+  import { EfiPixService } from './efi-pix.service'; // Importar a classe EfiPixService
   import { Deposit, DepositStatus } from '../models/payment/deposit.model';
   import { Withdrawal, WithdrawalStatus } from '../models/payment/withdrawal.model';
   import { v4 as uuidv4 } from 'uuid';
-  // CORRIGIDO: Importar o tipo Request do Express
   import { Request } from 'express';
   
   
   // Removido @UseGuards(AuthGuard('jwt')) do controlador inteiro
   @Controller('pix')
-  export class PixController {
+  export class PixController { // Mantido 'export class'
        private readonly logger = new Logger(PixController.name);
   
     constructor(
-      private readonly efiPixService: EfiPixService,
+      private readonly efiPixService: EfiPixService, // Injeção da classe
     ) {}
   
     // --- Endpoints de Configuração ---
@@ -44,7 +43,7 @@ import {
      * Requer chave Pix da Efí e a URL pública deste endpoint.
      * NOTE: Proteja este endpoint (ex: apenas ADMINs) em produção!
      */
-     // CORRIGIDO: Adicionado Put no decorator e UseGuards para proteger este endpoint
+     // Adicionado guarda JWT onde necessário
      @UseGuards(AuthGuard('jwt'))
      @Put('webhook/config/:chave')
      // Requer um guarda para restringir acesso (ex: role admin)
@@ -71,8 +70,9 @@ import {
          }
      }
   
+  
      // --- Endpoints de Depósito ---
-     // CORRIGIDO: Adicionado guarda JWT para este endpoint de usuário
+     // Adicionado guarda JWT para este endpoint de usuário
      @UseGuards(AuthGuard('jwt'))
      @Post('deposit/request')
      async requestDeposit(
@@ -89,7 +89,7 @@ import {
           }
   
          try {
-         const deposit = await this.efiPixService.createDepositCharge(
+         const deposit = await this.efiPixService.createDepositCharge( // CORRIGIDO: Chamar método público no service
              user.id,
              amountFormatted,
          );
@@ -113,7 +113,6 @@ import {
       * Este endpoint consulta a API Efí em tempo real.
       * O status local no DB é atualizado pelo webhook.
       */
-     // CORRIGIDO: Adicionado guarda JWT
      @UseGuards(AuthGuard('jwt'))
      @Get('deposit/:depositId/status')
      async getDepositStatus(
@@ -122,10 +121,10 @@ import {
      ): Promise<{ depositId: number; statusLocal: DepositStatus; statusEfi: string; amount: number; e2eId?: string; message?: string }> {
          try {
              // Buscar o registro local para obter o status local e o txid
-             const deposit = await this.efiPixService.getUserDepositById(user.id, depositId);
+             const deposit = await this.efiPixService.getUserDepositById(user.id, depositId); // CORRIGIDO: Chamar método público
   
              // Consultar o status ATUAL na Efí usando o método dedicado
-             const statusEfiData = await this.efiPixService.checkDepositStatusEfí(depositId);
+             const statusEfiData = await this.efiPixService.checkDepositStatusEfí(depositId); // CORRIGIDO: Chamar método público
   
   
              return {
@@ -144,7 +143,6 @@ import {
      }
   
       // --- Endpoints de Saque ---
-      // CORRIGIDO: Adicionado guarda JWT
       @UseGuards(AuthGuard('jwt'))
       @Post('withdrawal/request')
       async requestWithdrawal(
@@ -171,7 +169,7 @@ import {
          }
   
          try {
-             const withdrawal = await this.efiPixService.requestWithdrawal(
+             const withdrawal = await this.efiPixService.requestWithdrawal( // CORRIGIDO: Chamar método público no service
                  user.id,
                  amountFormatted,
                  pixKey,
@@ -198,7 +196,6 @@ import {
        * Este endpoint consulta a API Efí em tempo real.
        * O status local no DB é atualizado pelo webhook.
        */
-      // CORRIGIDO: Adicionado guarda JWT
       @UseGuards(AuthGuard('jwt'))
       @Get('withdrawal/:withdrawalId/status')
       async getWithdrawalStatus(
@@ -207,10 +204,10 @@ import {
       ): Promise<{ withdrawalId: number; statusLocal: WithdrawalStatus; statusEfi: string; amount: number; e2eId?: string; message?: string }> {
           try {
              // Buscar o registro local para obter status local e idEnvio
-             const withdrawal = await this.efiPixService.getUserWithdrawalById(user.id, withdrawalId);
+             const withdrawal = await this.efiPixService.getUserWithdrawalById(user.id, withdrawalId); // CORRIGIDO: Chamar método público
   
               // Consultar o status ATUAL na Efí usando o método dedicado
-             const statusEfiData = await this.efiPixService.checkWithdrawalStatusEfí(withdrawalId);
+             const statusEfiData = await this.efiPixService.checkWithdrawalStatusEfí(withdrawalId); // CORRIGIDO: Chamar método público
   
   
              return {
@@ -235,8 +232,8 @@ import {
       // Se @UseGuards(AuthGuard('jwt')) ESTÁ no controlador inteiro, este endpoint PRECISA ter @Public()
       // se você não quiser JWT nele (que é o caso para webhooks).
       // Importe @Public do seu módulo Auth, se você tiver implementado um decorator @Public().
-      // Para simplificar, vamos remover o guarda JWT do controlador inteiro e adicioná-lo APENAS aos endpoints que precisam.
-      // REMOVIDO: @UseGuards(AuthGuard('jwt')) do controlador inteiro
+      // Para simplificar, removemos o guarda JWT do controlador inteiro e adicionamos aos endpoints de usuário/config.
+      // Certifique-se que /pix/webhook NÃO TENHA UM GUARDA JWT ATIVO.
   
       /**
        * Endpoint para receber notificações de webhook da Efí.
@@ -247,10 +244,6 @@ import {
        * @returns HTTP status 200 para indicar recebimento bem-sucedido (string "200").
        */
        @Post('webhook') // O caminho deve corresponder ao configurado na Efí (/pix/webhook)
-       // CORRIGIDO: Usar Request do express como tipo para req
-       // ESTE ENDPOINT NÃO DEVE TER GUARDA JWT. Se você usar um guarda global no controller,
-       // este endpoint precisará de um decorator para torná-lo público, como @Public() se você tiver um.
-       // Como removemos o guarda global, este endpoint já é público.
        async receiveWebhook(@Body() payload: any, @Req() req: Request): Promise<string> {
   
             // --- Validação de Origem (Crucial!) ---
@@ -271,7 +264,7 @@ import {
   
             try {
                  // Passar o payload para o serviço processar
-                 await this.efiPixService.processWebhookNotification(payload);
+                 await this.efiPixService.processWebhookNotification(payload); // CORRIGIDO: Chamar método público
   
                  // Retornar status 200 OK para a Efí. Isso indica que você recebeu a notificação.
                  // A documentação da Efí exige que o corpo da resposta seja EXATAMENTE a string "200".
@@ -288,12 +281,11 @@ import {
   
   
       // --- Endpoints de Histórico ---
-      // CORRIGIDO: Adicionado guarda JWT onde necessário após removê-lo do controlador inteiro.
       @UseGuards(AuthGuard('jwt'))
       @Get('history/deposits')
       async getDepositHistory(@AuthUser() user: User): Promise<Deposit[]> {
           try {
-              return this.efiPixService.getUserDeposits(user.id);
+              return this.efiPixService.getUserDeposits(user.id); // CORRIGIDO: Chamar método público
           } catch (error) {
                const err = error as Error;
                this.logger.error(`Erro no controller ao obter histórico de depósitos para userId ${user.id}: ${err.message}`, err.stack);
@@ -301,12 +293,11 @@ import {
           }
       }
   
-      // CORRIGIDO: Adicionado guarda JWT
       @UseGuards(AuthGuard('jwt'))
       @Get('history/withdrawals')
       async getWithdrawalHistory(@AuthUser() user: User): Promise<Withdrawal[]> {
           try {
-              return this.efiPixService.getUserWithdrawals(user.id);
+              return this.efiPixService.getUserWithdrawals(user.id); // CORRIGIDO: Chamar método público
           } catch (error) {
               const err = error as Error;
                this.logger.error(`Erro no controller ao obter histórico de saques para userId ${user.id}: ${err.message}`, err.stack);
@@ -314,7 +305,6 @@ import {
           }
       }
   
-      // CORRIGIDO: Adicionado guarda JWT
       @UseGuards(AuthGuard('jwt'))
       @Get('deposit/:depositId')
       async getDepositDetails(
@@ -322,7 +312,7 @@ import {
          @Param('depositId', ParseIntPipe) depositId: number
       ): Promise<Deposit> {
           try {
-              return this.efiPixService.getUserDepositById(user.id, depositId);
+              return this.efiPixService.getUserDepositById(user.id, depositId); // CORRIGIDO: Chamar método público
           } catch (error) {
               const err = error as Error;
               this.logger.error(`Erro no controller ao obter detalhes do depósito ${depositId} para userId ${user.id}: ${err.message}`, err.stack);
@@ -330,7 +320,6 @@ import {
           }
       }
   
-      // CORRIGIDO: Adicionado guarda JWT
       @UseGuards(AuthGuard('jwt'))
       @Get('withdrawal/:withdrawalId')
       async getWithdrawalDetails(
@@ -338,7 +327,7 @@ import {
          @Param('withdrawalId', ParseIntPipe) withdrawalId: number
       ): Promise<Withdrawal> {
           try {
-              return this.efiPixService.getUserWithdrawalById(user.id, withdrawalId);
+              return this.efiPixService.getUserWithdrawalById(user.id, withdrawalId); // CORRIGIDO: Chamar método público
           } catch (error) {
               const err = error as Error;
               this.logger.error(`Erro no controller ao obter detalhes do saque ${withdrawalId} para userId ${user.id}: ${err.message}`, err.stack);
@@ -347,7 +336,6 @@ import {
       }
   
       // --- ENDPOINT DE TESTE DE SIMULAÇÃO ---
-      // CORRIGIDO: Adicionado guarda JWT
       @UseGuards(AuthGuard('jwt'))
       @Patch('deposit/:depositId/simulate-completion-test')
       async simulateDepositCompletionTest(
@@ -360,7 +348,7 @@ import {
   
           try {
                // Chamar o método de simulação no service
-               const updatedDeposit = await this.efiPixService.simulateDepositCompletionTest(depositId, e2eId);
+               const updatedDeposit = await this.efiPixService.simulateDepositCompletionTest(depositId, e2eId); // CORRIGIDO: Chamar método público
   
                // Verificar se o depósito pertence ao usuário (segurança extra)
                if (updatedDeposit.userId !== user.id) {
