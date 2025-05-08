@@ -5,17 +5,19 @@ import { Deposit } from '../models/payment/deposit.model';
 import { Withdrawal } from '../models/payment/withdrawal.model';
 import { EfiPixService } from './efi-pix.service';
 import { PixController } from './pix.controller';
-import { AuthModule } from '../Auth/auth.module'; // Precisamos do AuthService
-import { ConfigModule } from '@nestjs/config'; // Para acessar ConfigService
+import { AuthModule } from '../Auth/auth.module';
+import { ConfigModule } from '@nestjs/config';
+import { HttpModule } from '@nestjs/axios'; // Importar HttpModule
 
 @Module({
   imports: [
     SequelizeModule.forFeature([Deposit, Withdrawal]),
-    AuthModule, // Importar AuthModule para usar AuthService
-    ConfigModule, // Importar ConfigModule para usar ConfigService
+    AuthModule,
+    ConfigModule,
+    HttpModule, // Adicionar HttpModule aqui
   ],
   providers: [EfiPixService],
   controllers: [PixController],
-  exports: [EfiPixService], // Exportar se outros módulos precisarem interagir com ele
+  exports: [EfiPixService],
 })
 export class PaymentModule {}

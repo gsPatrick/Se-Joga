@@ -1,1080 +1,962 @@
 // src/payment/efi-pix.service.ts
-import { Injectable, Logger, InternalServerErrorException, BadRequestException, NotFoundException, UnauthorizedException, ConflictException } from '@nestjs/common';
-import { InjectModel } from '@nestjs/sequelize';
-import { Deposit, DepositStatus } from '../models/payment/deposit.model';
-import { Withdrawal, WithdrawalStatus } from '../models/payment/withdrawal.model';
-import { AuthService } from '../Auth/auth.service';
-import { ConfigService } from '@nestjs/config';
-import { Sequelize } from 'sequelize-typescript';
-import { Transaction, Op } from 'sequelize';
-import { v4 as uuidv4 } from 'uuid';
-import * as crypto from 'crypto';
-
-// --- IMPORTAR child_process para executar script Python ---
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import * as path from 'path';
-import * as fs from 'fs';
-import { AxiosRequestConfig } from 'axios';
-
-const execPromise = promisify(exec);
-// --- Fim import child_process ---
-
-// --- Remover imports do Axios, http, https, fs, path (exceto path/fs se usados para verificar certificado) ---
-// import axios, { AxiosInstance, AxiosRequestConfig, RawAxiosRequestHeaders } from 'axios';
-// import * as fs from 'fs'; // Já importado acima
-// import * as path from 'path'; // Já importado acima
-// import * as https from 'https'; // Não necessário para Node.js chamar Python
-// --- Fim da remoção ---
-
-
-@Injectable()
-export class EfiPixService {
-  private readonly logger = new Logger(EfiPixService.name);
-  // private efipayApi!: AxiosInstance; // Remover instância Axios
-  private accessToken: string | null = null;
-  private tokenExpiry: Date | null = null;
-  private readonly allowedWebhookIps: string[];
-
-  constructor(
-    @InjectModel(Deposit) private depositModel: typeof Deposit,
-    @InjectModel(Withdrawal) private withdrawalModel: typeof Withdrawal,
-    private authService: AuthService,
-    private configService: ConfigService,
-    private sequelize: Sequelize,
-  ) {
-    // this.configureAxiosInstance(); // Remover configuração Axios
-    const webhookIps = this.configService.get<string>('EFI_WEBHOOK_ALLOWED_IPS');
-    this.allowedWebhookIps = webhookIps ? webhookIps.split(',').map(ip => ip.trim()) : [];
-    if (this.allowedWebhookIps.length === 0) {
-        this.logger.warn('Nenhum IP permitido configurado para webhook da Efí (EFI_WEBHOOK_ALLOWED_IPS no .env). A validação por IP será desativada. Isso reduz a segurança em Produção.');
-    } else {
-        this.logger.log(`IPs permitidos para webhook da Efí: ${this.allowedWebhookIps.join(', ')}`);
+import {
+    Injectable,
+    Inject,
+    forwardRef,
+    BadRequestException,
+    NotFoundException,
+    InternalServerErrorException,
+    UnauthorizedException,
+    Logger,
+    OnModuleInit,
+  } from '@nestjs/common';
+  import { InjectModel } from '@nestjs/sequelize';
+  import { Deposit, DepositStatus } from '../models/payment/deposit.model';
+  import { Withdrawal, WithdrawalStatus } from '../models/payment/withdrawal.model';
+  import { User } from '../models/user/user.model';
+  import { HttpService } from '@nestjs/axios';
+  import { ConfigService } from '@nestjs/config';
+  import { AuthService } from '../Auth/auth.service';
+  import { Sequelize } from 'sequelize-typescript';
+  import { Transaction } from 'sequelize';
+  import { v4 as uuidv4 } from 'uuid';
+  import * as https from 'https';
+  import * as fs from 'fs';
+  import * as path from 'path';
+  import { firstValueFrom } from 'rxjs';
+  import { AxiosError } from 'axios';
+  // REMOVIDO: Interval não é mais usado para polling agendado
+  // import { Interval } from '@nestjs/schedule';
+  
+  
+  @Injectable()
+  export class EfiPixService implements OnModuleInit {
+  
+    private readonly logger = new Logger(EfiPixService.name);
+    private accessToken: string | null = null;
+    private tokenExpiry: Date | null = null;
+    private httpsAgent: https.Agent | undefined;
+  
+    // A flag isInitialized ainda é útil para garantir que o mTLS está pronto
+    private isInitialized = false;
+  
+    // --- CREDENCIAIS EFI HARDCODED (CONFORME SEU .env) ---
+    // !!! ATENÇÃO: HARDCODING É DESENCORAJADO EM PRODUÇÃO. !!!
+    // !!! USE ConfigService EM PRODUÇÃO PARA CARREGAR ESTAS CONFIGURAÇÕES. !!!
+    private readonly efiClientId = 'Client_Id_906a40d0e36fbc91d9ff27606eaa73f690696842';
+    private readonly efiClientSecret = 'Client_Secret_89388ab4e036b9af7cfe60476104e8964232a0c4';
+    private readonly efiCertPath = path.resolve(__dirname, '../../producao-756649-MundojackProducao.p12');
+    private readonly efiCertPassword = '';
+    private readonly efiBaseUrl = 'https://pix.api.efipay.com.br';
+    private readonly efiPixKey = 'f3e32c5a-7149-455b-bec9-50533910586d';
+    // --- FIM DAS CREDENCIAIS HARDCODED ---
+  
+  
+    constructor(
+      @InjectModel(Deposit)
+      private depositModel: typeof Deposit,
+      @InjectModel(Withdrawal)
+      private withdrawalModel: typeof Withdrawal,
+      private httpService: HttpService,
+      @Inject(forwardRef(() => AuthService))
+      private authService: AuthService,
+      private sequelize: Sequelize, // Injete o Sequelize para transações
+    ) {}
+  
+    async onModuleInit() {
+      this.logger.log('Inicializando EfiPixService...');
+      try {
+          if (!fs.existsSync(this.efiCertPath)) {
+               this.logger.error(`Arquivo de certificado não encontrado: ${this.efiCertPath}`);
+               throw new InternalServerErrorException(`Arquivo de certificado não encontrado: ${this.efiCertPath}`);
+          }
+  
+          this.httpsAgent = new https.Agent({
+              pfx: fs.readFileSync(this.efiCertPath),
+              passphrase: this.efiCertPassword,
+              rejectUnauthorized: true, // Manter true para validação de certificado do servidor Efí
+              minVersion: 'TLSv1.2', // Garantir TLS 1.2 ou superior
+          });
+           this.logger.log(`Certificado P12 carregado de: ${this.efiCertPath}`);
+  
+          // Marcar como inicializado APENAS se a configuração mTLS foi bem sucedida
+          this.isInitialized = true;
+          this.logger.log('EfiPixService inicializado com sucesso. Webhook será o método de atualização.');
+  
+  
+      } catch (error) {
+          const err = error as Error;
+          this.logger.error(`Erro durante a inicialização do EfiPixService: ${err.message}`, err.stack);
+          this.isInitialized = false;
+          throw err;
+      }
     }
-
-    // NOTE: A configuração do HTTPS Agent e certificado agora é responsabilidade do script Python.
-    // No entanto, a lógica de verificação do certificado ao iniciar o service pode ser mantida para logs.
-    const certPath = this.configService.get<string>('EFI_CERT_PATH');
-    const resolvedCertPath = path.resolve(certPath || '');
-    if (certPath && !fs.existsSync(resolvedCertPath)) {
-        this.logger.error(`Certificado EFI NÃO ENCONTRADO no caminho configurado: ${resolvedCertPath}. O script Python FALHARÁ ao tentar usá-lo.`);
-    } else if (certPath) {
-         this.logger.log(`Certificado EFI encontrado em: ${resolvedCertPath}.`);
-    } else {
-        this.logger.warn('Caminho do certificado EFI não configurado. O script Python FALHARÁ se a API exigir certificado.');
-    }
-
-  }
-
-  // private configureAxiosInstance() { /* Removido */ }
-
-
-    // --- Método para obter/gerenciar o token de acesso (AGORA VIA SCRIPT PYTHON) ---
+  
     private async getAccessToken(): Promise<string> {
-        // Se o token está em cache e válido, retorna o cache
-        if (this.accessToken && this.tokenExpiry && this.tokenExpiry > new Date(Date.now() + 5 * 60 * 1000)) {
-            this.logger.debug('Utilizando token da Efí em cache.');
-            return this.accessToken!;
+      const now = new Date();
+      if (this.accessToken && this.tokenExpiry && this.tokenExpiry.getTime() > (now.getTime() + 5 * 60 * 1000)) {
+          return this.accessToken!;
+      }
+  
+      this.logger.debug('Solicitando novo token de acesso Efí...');
+  
+      const auth = Buffer.from(`${this.efiClientId}:${this.efiClientSecret}`).toString('base64');
+      const tokenUrl = `${this.efiBaseUrl}/oauth/token`;
+  
+      try {
+        if (!this.httpsAgent) {
+             // Isso não deveria acontecer se onModuleInit foi bem sucedido, mas é um check de segurança
+             throw new InternalServerErrorException('HTTPS Agent não inicializado. Serviço Pix não está pronto.');
         }
-
-        this.logger.log('Obtendo novo token de acesso da Efí via script Python...');
-
-        // --- CONFIGURAÇÃO PARA PASSAR PARA O SCRIPT PYTHON VIA STDIN ---
-        const efiBaseUrl = this.configService.get<string>('EFI_BASE_URL') || 'https://pix.api.efipay.com.br';
-        const clientId = this.configService.get<string>('EFI_CLIENT_ID');
-        const clientSecret = this.configService.get<string>('EFI_CLIENT_SECRET');
-
-        // Calcula o Basic Auth para o script Python usar
-        if (!clientId || !clientSecret) {
-             const errorMessage = 'Credenciais da Efí (Client ID/Secret) não configuradas no .env.';
-             this.logger.error(errorMessage);
-             throw new InternalServerErrorException(errorMessage);
-        }
-        const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-
-
-        const requestConfig = {
-            method: 'POST',
-            url_path: '/oauth/token', // Endpoint para obter token
-            base_url: efiBaseUrl,
-            data: { "grant_type": "client_credentials" },
-            headers: {
-                'Authorization': `Basic ${basicAuth}`, // Passa o Basic Auth aqui
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-            },
-             // Não passa token Bearer aqui, pois esta é a requisição para obtê-lo
-        };
-        // --- Fim Configuração para passar ---
-
-
-        // --- OBTENDO CAMINHOS E EXECUTÁVEL ---
-        const pythonScriptPath = this.configService.get<string>('EFI_PYTHON_SCRIPT_PATH') || './efi_api_request.py';
-        const pythonExecutable = this.configService.get<string>('PYTHON_PATH') || 'python';
-
-         // Verifica se o caminho do script parece absoluto ou relativo
-        const isAbsolutePath = path.isAbsolute(pythonScriptPath);
-
-        // Resolve o caminho absoluto se for relativo, ou mantém o absoluto.
-        // Esta resolução é feita no lado Node.js ANTES de passar para o child_process.
-        // Em Windows, path.resolve() lida com barras \ e /.
-        const finalScriptPath = isAbsolutePath ? path.resolve(pythonScriptPath) : path.resolve(process.cwd(), pythonScriptPath);
-
-        // --- CONSTRUÇÃO CORRETA DO COMANDO PARA WINDOWS/CHILD_PROCESS ---
-        // Envolve o caminho FINAL do script em aspas duplas para lidar com espaços
-        // Garante que o executável Python seja o primeiro elemento do comando
-        const command = `${pythonExecutable} "${finalScriptPath}"`;
-
-
-        this.logger.debug(`Executing python command: ${command}`);
-
-
-        try {
-             // Executa o script Python, passando configs e dados via STDIN
-             // As variáveis de ambiente para o certificado são passadas para o PROCESSO Python.
-             const envVarsForPython = {
-                  ...process.env, // Mantém variáveis de ambiente existentes
-                 EFI_CERT_PATH: this.configService.get<string>('EFI_CERT_PATH'), // Passa caminho do certificado como ENV VAR
-                 EFI_CERT_PASSWORD: this.configService.get<string>('EFI_CERT_PASSWORD') || '', // Passa senha como ENV VAR
-                 // Incluir outras ENV VARs relevantes para o script Python se necessário
-             };
-
-            // Cria o child process e escreve a config JSON no STDIN
-            const child = execPromise(command, {
-                env: envVarsForPython, // Passa as variáveis de ambiente
-                timeout: 30000, // Timeout para a execução do script (30 segundos)
-                // shell: true, // Opcional: Usar shell (cmd.exe no Windows) pode ajudar a resolver caminhos, mas pode ser menos seguro
-            });
-
-
-            this.logger.debug(`Passing request config to python via STDIN: ${JSON.stringify(requestConfig)}`);
-            child.child.stdin?.write(JSON.stringify(requestConfig) + '\n');
-            child.child.stdin?.end(); // Fecha o STDIN
-
-            const { stdout, stderr } = await child;
-
-            // O script Python imprime logs de debug para STDERR e o resultado/erro final para STDOUT
-            if (stderr) {
-                // Este log já vem do stderr do Python, então não precisa adicionar file=sys.stderr
-                this.logger.error(`Erro no script Python (STDERR): ${stderr}`);
-            }
-
-             // O script Python DEVE imprimir um JSON para STDOUT com {"success": Bool, "data": ...} ou {"success": Bool, "error": {...}}
-            try {
-                const pythonResponse = JSON.parse(stdout);
-                this.logger.debug(`Python script STDOUT: ${stdout}`);
-
-                if (pythonResponse.success) {
-                    const tokenData = pythonResponse.data;
-                    const access_token = tokenData?.access_token;
-                    const expires_in = tokenData?.expires_in;
-
-                    if (!access_token || expires_in === undefined) {
-                         const errorMessage = `Resposta inesperada do script Python ao obter token: ${JSON.stringify(tokenData)}`;
-                         this.logger.error(errorMessage);
-                         throw new InternalServerErrorException(errorMessage);
-                    }
-
-                    this.accessToken = access_token;
-                    this.tokenExpiry = new Date(Date.now() + expires_in * 1000); // expires_in é em segundos
-
-                    this.logger.log('Novo token da Efí obtido com sucesso via script Python.');
-                    return this.accessToken!;
-
-                } else {
-                    // Script Python retornou um erro formatado
-                    const error = pythonResponse.error;
-                    this.logger.error(`Script Python reportou erro ao obter token: ${JSON.stringify(error)}`);
-                     // Tenta mapear o erro do script Python para uma NestJS Exception
-                     if (error?.status === 401) throw new UnauthorizedException(error.data || error.message);
-                     if (error?.status === 400) throw new BadRequestException(error.data || error.message);
-                     if (error?.status === 404) throw new NotFoundException(error.data || error.message);
-                     if (error?.status === 409) throw new ConflictException(error.data || error.message);
-                     // Lançar InternalServerError para outros erros ou erros sem status
-                     throw new InternalServerErrorException(`Script Python falhou ao chamar API Efí (/oauth/token): ${error?.message || 'Erro desconhecido'}`);
-                }
-
-            } catch (parseError: any) { // Explicitamente any para simplificar o tratamento de parseError
-                this.logger.error(`Error ao parsear saída JSON do script Python: ${stdout}`, parseError);
-                 // Se a saída não for um JSON válido, é um error na execução do script ou na saída dele
-                 throw new InternalServerErrorException(`Error ao processar resposta do script Python. Saída: "${stdout.substring(0, 200)}..."`);
-            }
-
-
-        } catch (execError: any) { // Explicitamente any para simplificar o tratamento de execError
-             // Erros de execução do comando (Python não encontrado, timeout, etc.)
-             this.logger.error(`Falha na execução do script Python para API Efí: ${execError.message}`, execError.stack);
-             // Adicione uma flag ou informação para saber que foi um erro de execução/rede, não da API Efí
-             const internalError = new InternalServerErrorException(`Falha na execução do script Python para API Efí: ${execError.message}`);
-             // (internalError as any).isNetworkOrTlsError = true; // Opcional: adicionar flag customizada se necessário no catch superior
-             throw internalError;
-        }
-    }
-
-    // --- Método auxiliar para fazer requisições autenticadas (AGORA VIA SCRIPT PYTHON) ---
-    // Não usa mais Axios diretamente para a chamada API.
-    private async makeEfiRequest(method: 'get' | 'post' | 'put' | 'patch' | 'delete', url_path: string, data?: any, extraConfig?: any): Promise<any> { // extraConfig pode ser qualquer coisa que o script Python entenda
-         this.logger.debug(`Preparing to call EFI API via Python: ${method} ${url_path}`);
-
-         // Obter o token de acesso para passar para o script Python
-         // A requisição para obter o token (url_path '/oauth/token') não precisa de token Bearer
-         const token = url_path === '/oauth/token' ? undefined : await this.getAccessToken();
-
-
-         // --- CONFIGURAÇÃO PARA PASSAR PARA O SCRIPT PYTHON VIA STDIN ---
-         const efiBaseUrl = this.configService.get<string>('EFI_BASE_URL') || 'https://pix.api.efipay.com.br';
-         const certPath = this.configService.get<string>('EFI_CERT_PATH');
-         const certPassword = this.configService.get<string>('EFI_CERT_PASSWORD') || '';
-
-         const requestConfig = {
-             method: method.toUpperCase(),
-             url_path: url_path,
-             base_url: efiBaseUrl,
-             data: data, // Passa o corpo da requisição
-             // Passa o token Bearer apenas se ele foi obtido (i.e., não é a requisição /oauth/token)
-             token: token,
-             headers: {
-                  // Adiciona cabeçalho Authorization Bearer SE o token foi obtido
-                  ...(token ? {'Authorization': `Bearer ${token}`} : {}),
-                  // Adiciona quaisquer headers passados no extraConfig (ex: x-skip-mtls-checking)
-                  ...(extraConfig?.headers || {}),
-             },
-         };
-         this.logger.debug(`Request config being sent to python: ${JSON.stringify(requestConfig)}`); // Log config sent
-
-
-         // --- OBTENDO CAMINHOS E EXECUTÁVEL ---
-         const pythonScriptPath = this.configService.get<string>('EFI_PYTHON_SCRIPT_PATH') || './efi_api_request.py';
-         const pythonExecutable = this.configService.get<string>('PYTHON_PATH') || 'python';
-
-         const isAbsolutePath = path.isAbsolute(pythonScriptPath);
-         const finalScriptPath = isAbsolutePath ? path.resolve(pythonScriptPath) : path.resolve(process.cwd(), pythonScriptPath);
-
-         // --- CONSTRUÇÃO CORRETA DO COMANDO PARA WINDOWS/CHILD_PROCESS ---
-         // Envolve o caminho FINAL do script em aspas duplas para lidar com espaços
-         const command = `${pythonExecutable} "${finalScriptPath}"`;
-
-
-         this.logger.debug(`Executing python command: ${command}`);
-
-
-         try {
-              // Executa o script Python, passando configs e dados via STDIN
-              const envVarsForPython = {
-                   ...process.env,
-                  EFI_CERT_PATH: certPath,
-                  EFI_CERT_PASSWORD: certPassword,
-              };
-              const child = execPromise(command, {
-                  env: envVarsForPython,
-                  timeout: 60000, // Timeout maior para requisições de API (60 segundos)
-              });
-
-               this.logger.debug(`Passing request config to python via STDIN: ${JSON.stringify(requestConfig)}`);
-               child.child.stdin?.write(JSON.stringify(requestConfig) + '\n');
-               child.child.stdin?.end();
-
-
-               const { stdout, stderr } = await child;
-
-
-               if (stderr) {
-                   this.logger.error(`Erro no script Python (STDERR): ${stderr}`);
-               }
-
-              // O script Python DEVE imprimir um JSON para STDOUT com {"success": Bool, "data": ...} ou {"success": Bool, "error": {...}}
-             try {
-                  const pythonResponse = JSON.parse(stdout);
-                  this.logger.debug(`Python script STDOUT: ${stdout}`);
-
-                  if (pythonResponse.success) {
-                      return pythonResponse.data; // Retorna os dados da API da Efí
-                  } else {
-                      // O script Python reportou um erro da API Efí ou um erro interno
-                      const error = pythonResponse.error;
-                      this.logger.error(`Script Python reportou error para ${method} ${url_path}: ${JSON.stringify(error)}`);
-
-                       // Tenta mapear erros comuns da API Efí para NestJS Exceptions
-                      if (error?.status === 401) throw new UnauthorizedException(error.data || error.message);
-                      if (error?.status === 404) throw new NotFoundException(error.data || error.message);
-                      if (error?.status === 409) throw new ConflictException(error.data || error.message);
-
-                       // Adicionar tratamento específico para erros 400 BadRequest com base no "nome" ou "mensagem" da Efí
-                       if (error?.status === 400) {
-                           // Exemplo específico para erro de webhook inválido
-                           if (error?.data?.nome === 'webhook_invalido' || error?.data?.mensagem?.includes('respondeu com o código HTTP')) {
-                               this.logger.error(`Erro específico da Efí: webhook_invalido. Mensagem: ${error.data.mensagem}`);
-                               // Lança BadRequest com a mensagem específica da Efí
-                               throw new BadRequestException(`Erro ao configurar webhook na Efí: ${error.data.mensagem}`);
-                           }
-                           // Outros erros 400 genéricos
-                           throw new BadRequestException(error.data || error.message);
-                       }
-
-                       // Para outros erros ou erros sem status específico
-                      throw new InternalServerErrorException(`Script Python falhou ao chamar API Efí (${method} ${url_path}): ${error?.message || 'Error desconhecido'}`);
-                  }
-
-              } catch (parseError: any) { // Explicitamente any para simplificar o tratamento de parseError
-                  this.logger.error(`Error ao parsear saída JSON do script Python: ${stdout}`, parseError);
-                   throw new InternalServerErrorException(`Error ao processar resposta do script Python. Saída: "${stdout.substring(0, 200)}..."`);
-              }
-
-
-           } catch (execError: any) { // Explicitamente any para simplificar o tratamento de execError
-                this.logger.error(`Falha na execução do script Python para API Efí: ${execError.message}`, execError.stack);
-                // Adicione uma flag ou informação para saber que foi um erro de execução/rede, não da API Efí
-                const internalError = new InternalServerErrorException(`Falha na execução do script Python para API Efí: ${execError.message}`);
-                // (internalError as any).isNetworkOrTlsError = true; // Opcional: adicionar flag customizada se necessário no catch superior
-                throw internalError;
+        this.logger.debug(`Fazendo POST para ${tokenUrl} para obter token...`); // Log antes da chamada
+        const response = await firstValueFrom(this.httpService.post(tokenUrl, { grant_type: 'client_credentials' }, {
+          headers: {
+            Authorization: `Basic ${auth}`,
+            'Content-Type': 'application/json',
+          },
+          httpsAgent: this.httpsAgent,
+        }));
+        this.logger.debug(`Resposta recebida de ${tokenUrl}. Status: ${response.status}`); // Log após a chamada
+  
+        this.accessToken = response.data.access_token;
+        this.tokenExpiry = new Date(now.getTime() + (response.data.expires_in * 1000));
+  
+        this.logger.log('Novo token de acesso Efí obtido e cached.');
+        return this.accessToken!;
+  
+      } catch (error) {
+          const axiosError = error as AxiosError;
+          this.logger.error(`Erro ao obter token de acesso Efí: ${axiosError.message}`, axiosError.stack);
+           if (axiosError.response) {
+              const errorData: any = axiosError.response.data;
+              this.logger.error(`Efí Token Error Response: Status ${axiosError.response.status}, Data: ${JSON.stringify(errorData)}`);
+           } else if (axiosError.request) {
+               this.logger.error(`Efí Token Error Request: No response received.`, axiosError.request);
+               this.logger.error(`Efí Token Error Request Config: ${JSON.stringify(axiosError.config)}`); // Logar config da requisição
+           } else {
+               this.logger.error(`Efí Token Error Message:`, axiosError.message);
            }
+        throw new UnauthorizedException('Falha ao obter token de acesso da API Pix Efí.');
       }
-
-
-  async createDepositCharge(userId: number, amount: number): Promise<Deposit> {
-    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
-        this.logger.error(`createDepositCharge: Valor do depósito inválido recebido para usuário ${userId}: ${amount}`);
-        throw new BadRequestException('Valor do depósito inválido.');
     }
-     const amountFixed = parseFloat(amount.toFixed(2));
-     if (amountFixed !== amount) {
-          this.logger.warn(`createDepositCharge: Valor do depósito para usuário ${userId} ajustado de ${amount} para ${amountFixed} para corresponder a 2 casas decimais.`);
-          amount = amountFixed;
-     }
-
-    const transaction = await this.sequelize.transaction();
-    let depositRecord: Deposit | null = null;
-
-    try {
-        depositRecord = await this.depositModel.create({
-            userId: userId,
-            amount: amount,
-            status: DepositStatus.PENDING,
-        }, { transaction });
-        this.logger.log(`Registro de depósito ${depositRecord.id} criado para o usuário ${userId}, valor R$ ${amount.toFixed(2)}. Status: PENDING.`);
-
-
-         const efiPixKey = this.configService.get<string>('EFI_PIX_KEY');
-         if (!efiPixKey) {
-              const msg = 'Chave Pix de recebimento (EFI_PIX_KEY) não configurada no .env.';
-              this.logger.error(msg);
-             throw new InternalServerErrorException(msg);
+  
+    // --- Métodos para Configuração de Webhook ---
+  
+    /**
+     * Configura a URL do webhook na Efí para receber notificações de status Pix.
+     * @param chave Sua chave Pix associada ao webhook.
+     * @param webhookUrl A URL pública do seu endpoint de webhook.
+     * @returns Promise<void>
+     * @throws InternalServerErrorException se houver erro na comunicação com a Efí.
+     */
+    public async configureWebhook(chave: string, webhookUrl: string): Promise<void> {
+         if (!this.isInitialized) {
+              throw new InternalServerErrorException('Serviço Pix não inicializado. Configuração de webhook não disponível.');
          }
-         this.logger.debug(`Usando chave Pix EFI: ${efiPixKey}`);
-
-        const chargeData = {
-            calendario: {
-                expiracao: 3600
-            },
-            valor: {
-                original: amount.toFixed(2)
-            },
-             chave: efiPixKey,
-            solicitacaoPagador: `Depósito para usuário ${userId} na Loto Jack (ID Transacao: ${depositRecord.id})`,
-        };
-
-        this.logger.debug(`Delegando POST /v2/cob to Python script with data: ${JSON.stringify(chargeData)}`);
-        // Use makeEfiRequest para chamar a API da Efí via script Python
-        const efiResponse = await this.makeEfiRequest('post', '/v2/cob', chargeData);
-
-
-         this.logger.debug(`Resposta do Script Python para criação de cobrança: ${JSON.stringify(efiResponse)}`);
-
-        if (!efiResponse || !efiResponse.txid || !efiResponse.pixCopiaECola || !efiResponse.loc?.location) {
-            const errorMessage = 'Resposta inesperada da Efí (via Python) ao criar cobrança: dados de retorno incompletos (txid, pixCopiaECola, location).';
-             this.logger.error(`${errorMessage} Resposta completa: ${JSON.stringify(efiResponse)}`);
-            throw new InternalServerErrorException(errorMessage);
-        }
-
-        await depositRecord.update({
-            efiTxid: efiResponse.txid,
-            qrCodeImage: efiResponse.loc.location,
-            pixCopiaECola: efiResponse.pixCopiaECola,
-            status: DepositStatus.PENDING, // Mantém PENDING, será atualizado pelo webhook
-             efiCreateChargePayload: JSON.stringify(chargeData), // Opcional: Salvar payload enviado
-             efiCreateChargeResponse: JSON.stringify(efiResponse), // Opcional: Salvar resposta recebida
-        }, { transaction });
-        this.logger.log(`Registro de depósito ${depositRecord.id} atualizado com dados da Efí (via Python) (txid ${depositRecord.efiTxid}, QR Code URL, Pix Copia e Cola). Status: PENDING.`);
-
-
-        await transaction.commit();
-
-        this.logger.log(`Cobrança de depósito ${depositRecord.id} criada com sucesso na Efí (via Python) e registro local finalizado.`);
-
-        await depositRecord.reload();
-
-        return depositRecord;
-
-    } catch (error: unknown) { // Catch variable explicitly typed as unknown
-         if (transaction && !(transaction as any).finished) {
-             try {
-                 await transaction.rollback();
-                 this.logger.warn(`Rollback executado para criação de depósito do usuário ${userId} devido a error capturado.`);
-             } catch (rollbackError: any) {
-                  if (!rollbackError.message?.includes('already')) {
-                    this.logger.error(`Error ao tentar executar rollback no CATCH para criação de depósito do usuário ${userId}: ${rollbackError}`);
+         this.logger.log(`Configurando webhook Efí para chave ${chave} na URL: ${webhookUrl}`);
+  
+         const accessToken = await this.getAccessToken();
+         const webhookConfigUrl = `${this.efiBaseUrl}/v2/webhook/${chave}`;
+  
+         try {
+              const requestBody = {
+                  webhookUrl: webhookUrl
+              };
+  
+              // Usamos o header x-skip-mtls-checking: true porque você não quer configurar mTLS no seu servidor AGORA.
+              // ISSO REDUZ A SEGURANÇA. Em PRODUÇÃO, configure mTLS no seu servidor E NÃO use este header.
+              // O PixController (webhook receiver) DEVE validar a origem com IP ou HMAC.
+               this.logger.warn('Configurando webhook com x-skip-mtls-checking: true. Validação de origem NO SEU ENDPOINT É FUNDAMENTAL.');
+  
+              const response = await firstValueFrom(this.httpService.put(webhookConfigUrl, requestBody, {
+                  headers: {
+                      Authorization: `Bearer ${accessToken}`,
+                      'Content-Type': 'application/json',
+                      'x-skip-mtls-checking': 'true', // <--- Pular validação mTLS no seu servidor para Efí
+                  },
+                  httpsAgent: this.httpsAgent, // Usar agente com certificado Efí para autenticação Efí -> Efí
+              }));
+  
+              this.logger.log(`Webhook configurado com sucesso para chave ${chave}. Status: ${response.status}.`);
+              // A resposta 201 é esperada para sucesso na configuração.
+              // A Efí deve enviar uma notificação de teste para a URL configurada logo após.
+  
+         } catch (error) {
+             const axiosError = error as AxiosError;
+             this.logger.error(`Erro ao configurar webhook na Efí para chave ${chave}, URL ${webhookUrl}: ${(error as Error).message}`, (error as Error).stack);
+             if (axiosError.response) {
+                 const errorData: any = axiosError.response.data;
+                 this.logger.error(`Efí API Response Error (Configure Webhook): Status ${axiosError.response.status}, Data: ${JSON.stringify(errorData)}`);
+                 // Mapear erros 4xx específicos, se aplicável
+                 if (axiosError.response.status >= 400 && axiosError.response.status < 500) {
+                     throw new BadRequestException(`Erro da API Efí ao configurar webhook: ${errorData?.detail || errorData?.mensagem || 'Detalhe não disponível'}`);
                  }
+             } else if (axiosError.request) {
+                 this.logger.error(`Efí API Request Error (Configure Webhook): No response received.`, axiosError.request);
              }
+             throw new InternalServerErrorException('Erro ao configurar webhook na API Pix Efí.');
          }
-
-         // Se a transação de criação falhou antes do commit, o registro inicial pode nem existir ou estar em estado inconsistente.
-         // A lógica de marcar como FAILED aqui pode precisar de ajuste dependendo de quando o erro ocorreu.
-         // Se o erro for de makeEfiRequest (após a criação inicial do registro PENDING), essa lógica faz sentido.
-         if (depositRecord && depositRecord.id && depositRecord.status === DepositStatus.PENDING) {
-            try {
-               const updateTransaction = await this.sequelize.transaction();
-               await depositRecord.update({ status: DepositStatus.FAILED }, { transaction: updateTransaction });
-               await updateTransaction.commit();
-               this.logger.error(`Registro de depósito ${depositRecord.id} (txid: ${depositRecord.efiTxid ?? 'N/A'}) marcado como FAILED após falha na criação da cobrança na Efí (via Python).`);
-            } catch (updateError: any) { // Explicitly any for rollbackError
-               this.logger.error(`Falha ao marcar registro de depósito ${depositRecord.id} como FAILED: ${(updateError as any).message}`);
-            }
-         }
-
-        // Relança exceções NestJS conhecidas (de makeEfiRequest ou validações iniciais)
-        if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof UnauthorizedException || error instanceof ConflictException) {
-            throw error;
-        }
-         // Relança erro específico de configuração local
-         if (error instanceof InternalServerErrorException && (error as any).message.includes('EFI_PIX_KEY')) {
-            throw error;
-        }
-
-        // --- CORREÇÃO: Acessar message e stack APENAS se for instância de Error ---
-        let errorMessage = 'Unknown error';
-        // --- CORREÇÃO: Definir errorStack como string | undefined ---
-        let errorStack: string | undefined = undefined;
-
-        if (error instanceof Error) {
-             errorMessage = error.message;
-             errorStack = error.stack;
-        } else {
-             // Se não for instância de Error, tente converter para string
-             errorMessage = String(error);
-        }
-
-        // Captura qualquer outro erro não tratado e lança como InternalServerError
-        this.logger.error(`Error inesperado ao criar cobrança de depósito para usuário ${userId}: ${errorMessage}`, errorStack);
-        throw new InternalServerErrorException('Error interno ao solicitar depósito.');
     }
-}
-
-  async requestWithdrawal(userId: number, amount: number, pixKeyData: { keyType: string; keyValue: string; name?: string; cpfCnpj?: string }): Promise<Withdrawal> {
-    if (typeof amount !== 'number' || isNaN(amount) || amount <= 0) {
-        this.logger.error(`requestWithdrawal: Valor do saque inválido recebido para usuário ${userId}: ${amount}`);
-        throw new BadRequestException('Valor do saque inválido.');
-    }
-    const amountFixed = parseFloat(amount.toFixed(2));
-     if (amountFixed !== amount) {
-         this.logger.warn(`requestWithdrawal: Valor do saque para usuário ${userId} ajustado de ${amount} para ${amountFixed} para corresponder a 2 casas decimais.`);
-          amount = amountFixed;
-     }
-
-    if (!pixKeyData || !pixKeyData.keyType || !pixKeyData.keyValue) {
-        this.logger.error(`requestWithdrawal: Dados da chave Pix incompletos para usuário ${userId}: ${JSON.stringify(pixKeyData)}`);
-        throw new BadRequestException('Dados da chave Pix incompletos.');
-    }
-
-    const transaction = await this.sequelize.transaction();
-    let withdrawalRecord: Withdrawal | null = null;
-
-    try {
-        // AQUI está a chamada para o updateUserBalance.
-        // O erro de "Saldo insuficiente" ocorre DENTRO deste método.
-        // Sem o erro customizado 'InsufficientBalanceError', ele cairá no 'catch' abaixo.
-        const user = await this.authService.updateUserBalance(userId, -amount, transaction);
-        this.logger.log(`Saldo do usuário ${userId} debitado em R$ ${amount.toFixed(2)} para saque.`);
-
-        const efiIdEnvio = uuidv4().replace(/-/g, '');
-        this.logger.debug(`Generated efiIdEnvio (without hyphens): ${efiIdEnvio}`);
-
-        withdrawalRecord = await this.withdrawalModel.create({
-            userId: userId,
-            amount: amount,
-            status: WithdrawalStatus.PROCESSING, // Status inicial para saques processados pela API
-            targetPixKeyType: pixKeyData.keyType,
-            targetPixKey: pixKeyData.keyValue,
-            targetName: pixKeyData.name,
-            targetCpfCnpj: pixKeyData.cpfCnpj,
-            efiIdEnvio: efiIdEnvio,
-        }, { transaction });
-        this.logger.log(`Registro de saque ${withdrawalRecord.id} criado para o usuário ${userId}, valor R$ ${amount.toFixed(2)}. Status: PROCESSING. efiIdEnvio: ${efiIdEnvio}`);
-
-
-         const efiPixKeyPagador = this.configService.get<string>('EFI_PIX_KEY');
-         if (!efiPixKeyPagador) {
-             const msg = 'Chave Pix da conta pagadora (EFI_PIX_KEY) não configurada no .env.';
-             this.logger.error(msg);
-            throw new InternalServerErrorException(msg);
+  
+  
+    // --- Métodos para Processamento de Webhook ---
+  
+    /**
+     * Processa o payload de um webhook recebido da Efí.
+     * Itera sobre as notificações Pix no payload e atualiza os registros locais e saldos.
+     * @param payload O corpo da requisição POST recebida do webhook da Efí.
+     * @returns Promise<void>
+     */
+    public async processWebhookNotification(payload: any): Promise<void> {
+         if (!this.isInitialized) {
+              this.logger.warn('Webhook recebido, mas serviço Pix não inicializado. Ignorando payload.');
+             return;
          }
-
-         // O token é obtido dentro do makeEfiRequest, não precisa obter aqui separadamente
-
-         const withdrawalData = {
-            valor: amount.toFixed(2),
-             pagador: {
-                 chave: efiPixKeyPagador,
-                 infoPagador: `Saque Loto Jack (ID: ${withdrawalRecord.id}, User: ${userId})`,
-             },
-             favorecido: {
-                 chave: pixKeyData.keyValue,
-             }
-         };
-
-        this.logger.debug(`Delegando PUT /v3/gn/pix/${efiIdEnvio} to Python script with data: ${JSON.stringify(withdrawalData)}`);
-        // Use makeEfiRequest para chamar a API da Efí via script Python
-        const efiResponse = await this.makeEfiRequest('put', `/v3/gn/pix/${efiIdEnvio}`, withdrawalData);
-
-
-        this.logger.debug(`Resposta do Script Python para requisição de saque (${efiIdEnvio}): ${JSON.stringify(efiResponse)}`);
-
-         // A API de envio retorna dados sobre a transação, incluindo o E2EId final se sucesso
-         if (efiResponse && efiResponse.e2eId) {
-             await withdrawalRecord.update({
-                  efiE2eId: efiResponse.e2eId,
-                  // O status será atualizado pelo webhook (CONCLUIDA, NEGADA, etc.)
-             }, { transaction });
-              this.logger.log(`Registro de saque ${withdrawalRecord.id} atualizado com E2EId ${withdrawalRecord.efiE2eId}.`);
-         } else {
-              // Tratar caso a API de envio não retorne os dados esperados, embora sucesso (status 200)
-              this.logger.warn(`Resposta da Efí para saque ${efiIdEnvio} não contém E2EId esperado. Resposta: ${JSON.stringify(efiResponse)}`);
-             // O registro fica em PROCESSING até o webhook chegar
+  
+         this.logger.log(`Webhook recebido. Processando payload completo: ${JSON.stringify(payload)}`);
+  
+         // O payload deve conter um array 'pix' com as transações notificadas
+         const pixNotifications = payload?.pix;
+  
+         if (!Array.isArray(pixNotifications) || pixNotifications.length === 0) {
+             this.logger.warn('Webhook recebido, mas payload.pix não é um array ou está vazio. Nada para processar.');
+             return;
          }
-
-
-        await transaction.commit();
-
-        this.logger.log(`Saque ${withdrawalRecord.id} (efiIdEnvio: ${efiIdEnvio}) para R$ ${amount.toFixed(2)} solicitado para chave ${pixKeyData.keyValue} (tipo ${pixKeyData.keyType}). Status local inicial: PROCESSING.`);
-
-        await withdrawalRecord.reload();
-
-        return withdrawalRecord;
-
-    } catch (error: unknown) { // Catch variable explicitly typed as unknown
-         if (transaction && !(transaction as any).finished) {
+  
+         // Processa cada item (transação Pix) no array de notificações
+         for (const notification of pixNotifications) {
              try {
-                 await transaction.rollback();
-                 this.logger.warn(`Rollback executado para solicitação de saque do usuário ${userId} devido a error capturado.`);
-             } catch (rollbackError: any) { // Explicitly any for rollbackError
-                  if (!rollbackError.message?.includes('already')) {
-                    this.logger.error(`Error ao tentar executar rollback no CATCH para solicitação de saque do usuário ${userId}: ${rollbackError}`);
+                  // Adicionar log detalhado da notificação individual
+                 this.logger.debug(`Processando item do webhook: ${JSON.stringify(notification)}`);
+  
+                 // Extrai dados relevantes. e2eId é o identificador único do Pix.
+                 // txid é para cobranças (recebidos), idEnvio é para envios (saques).
+                 const { endToEndId, txid, idEnvio, status, valor } = notification;
+  
+                 if (!endToEndId) {
+                       this.logger.warn(`Webhook notification item sem e2eId. Ignorando.`);
+                       continue; // Não podemos processar sem um identificador principal
+                  }
+  
+                   this.logger.debug(`Processando notificação Pix com e2eId: ${endToEndId}, txid: ${txid}, idEnvio: ${idEnvio}, status Efí: ${status}, valor: ${valor}`);
+  
+  
+                  // --- Tentar encontrar e processar como DEPÓSITO ---
+                  // Depósitos são Pix Recebidos (usualmente associados a COB/COBV).
+                  // A notificação para um Depósito CONCLUIDA terá o txid que criamos na COB e o e2eId.
+                  let deposit = await this.depositModel.findOne({
+                      where: { txid: txid || null }, // Preferimos buscar pelo txid que criamos
+                      include: [User]
+                  });
+                   // Fallback: Se não achou pelo txid, tenta pelo e2eId (menos confiável, mas possível)
+                  if (!deposit && endToEndId) {
+                       deposit = await this.depositModel.findOne({ where: { e2eId: endToEndId }, include: [User] }); // CORRIGIDO: Usar endToEndId
+                  }
+  
+  
+                 if (deposit) {
+                     this.logger.debug(`Webhook matched Deposit ID ${deposit.id}. Efí Status: ${status}. Local Status: ${deposit.status}.`);
+                     await this._updateDepositStatusFromWebhook(deposit, status, endToEndId);
+                     continue; // Processado como depósito, vai para o próximo item do webhook
                  }
-             }
-         }
-
-         // Lógica para marcar o saque como FAILED em caso de erro durante o processo.
-         // Se o registro de saque já foi criado (antes do erro), marca como FAILED.
-         if (withdrawalRecord && withdrawalRecord.id && withdrawalRecord.status === WithdrawalStatus.PROCESSING) {
-             try {
-                const updateTransaction = await this.sequelize.transaction();
-                await withdrawalRecord.update({ status: WithdrawalStatus.FAILED }, { transaction: updateTransaction });
-                await updateTransaction.commit();
-                 this.logger.error(`Registro de saque ${withdrawalRecord.id} marcado como FAILED (após rollback).`);
-             } catch (updateError: any) { // Explicitly any for updateError
-                this.logger.error(`Falha ao marcar registro de saque ${withdrawalRecord.id} como FAILED: ${(updateError as any).message}`);
-             }
-         }
-
-         // Se o erro veio do updateUserBalance (saldo insuficiente) e ele lançou um Error com mensagem específica
-         // Note: Sem InsufficientBalanceError customizado, a verificação é baseada na mensagem.
-         // Isto é menos robusto. Ideal seria um erro customizado.
-         // O erro que você viu foi "Insufficient balance during transaction"
-         if (error instanceof Error && error.message.includes('Insufficient balance')) { // Adapte a mensagem conforme o erro real do seu updateUserBalance
-             this.logger.error(`requestWithdrawal: Saldo insuficiente detectado para usuário ${userId}. Mensagem: ${error.message}`);
-              // Se o registro de saque foi criado, marca como FAILED antes de lançar BadRequest
-              // (Já fizemos isso na lógica acima, mas pode ser repetido aqui se necessário)
-             throw new BadRequestException('Saldo insuficiente para concluir o saque.');
-         }
-
-
-         // Relança exceções NestJS conhecidas (de makeEfiRequest ou validações iniciais)
-         if (error instanceof BadRequestException || error instanceof NotFoundException || error instanceof UnauthorizedException || error instanceof ConflictException) {
-             throw error;
-         }
-         // Relança erro específico de configuração local
-         if (error instanceof InternalServerErrorException && (error as any).message.includes('Chave Pix da conta pagadora')) {
-             throw error;
-         }
-         // Note: makeEfiRequest já trata erros de rede/TLS do Python e os lança como InternalServerErrorException
-         /*
-         if ((error as any).isNetworkOrTlsError) { // Assumindo que makeEfiRequest adiciona esta flag
-              this.logger.error(`Error de rede/TLS (via Python) ao solicitar saque para usuário ${userId}: ${(error as any).message}`, (error as any).stack);
-              throw new InternalServerErrorException('Falha de comunicação segura (via Python) com a API da Efí ao solicitar saque.');
-         }
-         */
-
-         // --- CORREÇÃO: Acessar message e stack APENAS se for instância de Error ---
-         let errorMessage = 'Unknown error';
-         // --- CORREÇÃO: Definir errorStack como string | undefined ---
-         let errorStack: string | undefined = undefined;
-
-         if (error instanceof Error) {
-              errorMessage = error.message;
-              errorStack = error.stack;
-         } else {
-              // Se não for instância de Error, tente converter para string
-              errorMessage = String(error);
-         }
-
-         // Captura qualquer outro erro não tratado e lança como InternalServerError
-         this.logger.error(`Error inesperado ao solicitar saque para usuário ${userId}: ${errorMessage}`, errorStack);
-         throw new InternalServerErrorException('Error interno ao solicitar saque.');
-    }
-}
-
-  async handleWebhook(efiPayload: any, rawBody: Buffer, clientIp: string | undefined): Promise<void> {
-      this.logger.log(`Webhook da Efí recebido. Validando segurança e processando payload...`);
-      const expectedWebhookSecret = this.configService.get<string>('EFI_WEBHOOK_SECRET');
-
-      // --- VALIDAÇÃO DE SEGURANÇA (Produção) ---
-
-      // 1. Validação por IP de Origem (Recomendado pela Efí com skip-mTLS)
-      // Adicione o IP 34.193.116.226 (e outros se a documentação ou logs mostrarem) no seu .env em EFI_WEBHOOK_ALLOWED_IPS
-      if (this.allowedWebhookIps.length > 0) {
-          if (clientIp === undefined || !this.allowedWebhookIps.includes(clientIp)) {
-              this.logger.warn(`Tentativa de acesso não autorizado ao webhook. IP de Origem "${clientIp}" (ou undefined) NÃO está na lista de IPs permitidos: [${this.allowedWebhookIps.join(', ')}]. Ignorando payload.`);
-              return; // Retorna sem processar se o IP não está na lista permitida
-          }
-          this.logger.debug(`IP de Origem "${clientIp}" validado com sucesso.`);
-      } else {
-          this.logger.warn('Validação por IP de webhook desativada (EFI_WEBHOOK_ALLOWED_IPS não configurado). Considere configurá-la para aumentar a segurança.');
-      }
-
-      // 2. Validação de HMAC (Altamente Recomendado pela Efí com skip-mTLS)
-      // A documentação fala sobre HMAC na URL, não em header.
-      // Seu controller atual não extrai HMAC de query params.
-      // Se a Efí enviar HMAC na query string (ex: /webhook/SECREDO/pix?hmac=...), você precisará:
-      // a) Capturar o 'hmac' no @Query() no controller.
-      // b) Implementar a lógica de cálculo e comparação de HMAC aqui no service.
-      // c) O segredo para o HMAC pode ser o mesmo do webhookSecret ou outro.
-      const receivedHmac = "PLACEHOLDER_HMAC_RECEBIDO"; // <-- AINDA PRECISA OBTER ESTE VALOR REAL
-      const webhookSecretKey = this.configService.get<string>('EFI_WEBHOOK_SECRET'); // Ou um segredo diferente para HMAC
-
-      // Esta validação de HMAC está comentada porque ainda não sabemos onde a Efí envia o HMAC e qual algoritmo usa
-      /*
-      if (webhookSecretKey && receivedHmac !== "PLACEHOLDER_HMAC_RECEBIDO") { // Verifique se o HMAC recebido é real e se há um segredo configurado
-          try {
-              // Exemplo comum: const expectedHmac = crypto.createHmac('sha256', webhookSecretKey).update(rawBody).digest('hex');
-              // TODO: Implementar cálculo e comparação do HMAC baseado na documentação exata da Efí
-              this.logger.debug('Validação de HMAC pendente de implementação completa.');
-              // TODO: if (expectedHmac !== receivedHmac) { this.logger.warn(...); return; }
-
-          } catch (hmacError: unknown) { // Catch explicitly typed as unknown
-               // --- CORREÇÃO: Acessar message APENAS se for instância de Error ---
-               let hmacErrorMessage = 'Unknown error during HMAC validation';
-               if (hmacError instanceof Error) {
-                   hmacErrorMessage = hmacError.message;
-               } else {
-                   hmacErrorMessage = String(hmacError);
-               }
-              this.logger.error(`Erro durante a validação de HMAC do webhook para IP "${clientIp}": ${hmmacErrorMessage}. Ignorando payload.`);
-              return; // Retorna em caso de erro na validação de HMAC
-          }
-      } else if (webhookSecretKey) {
-           this.logger.warn('Validação de HMAC do webhook desativada (HMAC recebido é placeholder ou não configurado para receber).');
-      } else if (!webhookSecretKey) {
-           this.logger.warn('Validação de HMAC do webhook desativada (EFI_WEBHOOK_SECRET não configurado). Considere configurá-la para aumentar a segurança.');
-      }
-      */
-
-      // --- Fim Validação de Segurança ---
-      this.logger.debug('Validação de segurança inicial do webhook concluída. Processando payload...');
-
-
-      if (!Array.isArray(efiPayload)) {
-          this.logger.error(`Payload do webhook da Efí não é um array inesperado. Recebido: ${JSON.stringify(efiPayload)}`);
-           return; // Retorna se o payload não for um array como esperado
-      }
-
-      for (const event of efiPayload) {
-           // Processa eventos de PIX Recebido
-           const eventPixRecebido = (event as any).pix;
-
-           // O payload do webhook para PIX Recebido tem a estrutura { pix: [...] }
-           // Dentro do array 'pix', cada item representa um PIX recebido
-           if (eventPixRecebido && Array.isArray(eventPixRecebido)) {
-               for (const pixEventDetails of eventPixRecebido) {
-                    // Verifica se os campos necessários existem no detalhe do evento Pix
-                    if (pixEventDetails.e2eId && pixEventDetails.valor !== undefined && pixEventDetails.txid) {
-                         const e2eId = pixEventDetails.e2eId;
-                         const amountReceived = parseFloat(pixEventDetails.valor);
-                         const txid = pixEventDetails.txid;
-
-                         if (isNaN(amountReceived)) {
-                             this.logger.error(`Webhook PIX recebido (E2EId ${e2eId}): Valor (${pixEventDetails.valor}) inválido no detalhe do evento.`);
-                             continue; // Pula para o próximo item no array 'pix'
-                         }
-
-                         this.logger.log(`Processando Detalhe de Webhook PIX recebido: E2EId ${e2eId}, Txid ${txid}, Valor R$ ${amountReceived.toFixed(2)}.`);
-
-                         const transaction = await this.sequelize.transaction();
-                         let depositRecord: Deposit | null = null;
-
-                         try {
-                             // Tenta encontrar o depósito pelo txid (usado na criação da cobrança)
-                             // ou pelo e2eId (identificador da transação PIX recebida)
-                             depositRecord = await this.depositModel.findOne({
-                                 where: {
-                                     [Op.or]: [
-                                         { efiTxid: txid },
-                                         { efiE2eId: e2eId }, // Pode ser que o e2eId chegue antes para depósitos manuais não iniciados pela app
-                                     ],
-                                 },
-                                 transaction,
-                                 lock: transaction.LOCK.UPDATE, // Bloqueia o registro para evitar processamento duplicado por webhooks múltiplos
-                             });
-
-                             if (!depositRecord) {
-                                 this.logger.warn(`Webhook PIX recebido (E2EId ${e2eId}, Txid ${txid}): Depósito correspondente NON found or already processed. Could be duplicate notification or PIX not initiated by the app.`);
-                                 await transaction.commit(); // Commit transaction even if no record found to release lock (if any)
-                                 continue; // Pula para o próximo item no array 'pix'
-                             }
-
-                             if (depositRecord.status === DepositStatus.PAID) {
-                                 this.logger.warn(`Webhook PIX recebido (E2EId ${e2eId}, Txid ${txid}): Depósito ${depositRecord.id} já está no status PAID.`);
-                                  await transaction.commit(); // Commit transaction even if already paid
-                                  continue; // Pula para o próximo item no array 'pix'
-                             }
-
-                              // Opcional: Validar se o valor recebido no webhook corresponde ao valor da cobrança
-                              // Útil para detectar fraudes ou erros
-                              if (depositRecord.amount.toFixed(2) !== amountReceived.toFixed(2)) {
-                                  this.logger.error(`Webhook PIX recebido (E2EId ${e2eId}, Txid ${txid}): Discrepancy in value. Deposit ${depositRecord.id} expected ${depositRecord.amount.toFixed(2)}, received ${amountReceived.toFixed(2)}. NOT AUTOMATICALLY CREDITED.`);
-                                   // Você pode querer logar isso para revisão manual ou ter outra lógica de tratamento
-                                   await transaction.commit();
-                                  continue; // Não credita o saldo e pula para o próximo
-                              }
-
-                             // --- Ações para PIX Recebido (Depósito) ---
-                             await depositRecord.update({
-                                 status: DepositStatus.PAID,
-                                 efiE2eId: e2eId, // Atualiza o e2eId final se não o tínhamos (txid é da cobrança, e2eId da transação de pagamento)
-                             }, { transaction });
-                             this.logger.log(`Registro de depósito ${depositRecord.id} atualizado para PAID. E2EId: ${e2eId}.`);
-
-                             // Crédita o saldo do usuário
-                             // Se updateUserBalance lançar um erro (ex: usuário não encontrado - menos provável aqui), a transação fará rollback
-                             await this.authService.updateUserBalance(depositRecord.userId, depositRecord.amount, transaction);
-                             this.logger.log(`Saldo de R$ ${depositRecord.amount.toFixed(2)} creditado para o usuário ${depositRecord.userId} (Depósito ${depositRecord.id}).`);
-
-                             await transaction.commit();
-                             this.logger.log(`Processamento do webhook para depósito ${depositRecord.id} (E2EId ${e2eId}) concluído com sucesso.`);
-
-                         } catch (error: unknown) { // Catch explicitly typed as unknown
-                              if (transaction && !(transaction as any).finished) {
-                                  await transaction.rollback();
-                                  this.logger.warn(`Rollback executado para processamento de webhook (Depósito, E2EId ${e2eId}) devido a error.`);
-                              }
-                             // --- CORREÇÃO: Acessar message e stack APENAS se for instância de Error ---
-                             let errorMessage = 'Unknown error';
-                              // --- CORREÇÃO: Definir errorStack como string | undefined ---
-                             let errorStack: string | undefined = undefined;
-
-
-                             if (error instanceof Error) {
-                                  errorMessage = error.message;
-                                  errorStack = error.stack;
-                             } else {
-                                  errorMessage = String(error);
-                             }
-                             this.logger.error(
-                                 `Error ao processar webhook para depósito (E2EId ${e2eId}, Txid ${txid}): ${errorMessage}`,
-                                 errorStack
-                             );
-                             // Continua para o próximo item mesmo em caso de erro no processamento de um item específico
-                         }
-                    } else {
-                        this.logger.warn(`Webhook da Efí recebeu um evento 'pix' com formato inesperado no detalhe: ${JSON.stringify(pixEventDetails)}`);
-                    }
-               } // Fim do loop sobre detalhes do array 'pix'
-
-           } // Fim if (eventPixRecebido && Array.isArray(eventPixRecebido))
-
-            // Processa eventos de ENVIO PIX (gnPix) - Saques
-            const eventGnPixEnvio = (event as any).gnPix;
-
-            // O payload do webhook para ENVIO PIX tem a estrutura { gnPix: [...] }
-            // Dentro do array 'gnPix', cada item representa um saque
-            if (eventGnPixEnvio && Array.isArray(eventGnPixEnvio)) {
-                for (const gnPixEventDetails of eventGnPixEnvio) {
-                    // Verifica se os campos necessários existem no detalhe do evento GnPix
-                     if (gnPixEventDetails.idEnvio && gnPixEventDetails.status) {
-                          const idEnvio = gnPixEventDetails.idEnvio; // O efiIdEnvio que você criou
-                          const statusEfí = gnPixEventDetails.status;
-                          const e2eId = gnPixEventDetails.e2eId; // O e2eId da transação de envio, se CONCLUIDA
-
-                          this.logger.log(`Processando Detalhe de Webhook ENVIO PIX: idEnvio ${idEnvio}, Status EFI: ${statusEfí}, E2EId: ${e2eId ?? 'N/A'}.`);
-
-                          const transaction = await this.sequelize.transaction();
-                          let withdrawalRecord: Withdrawal | null = null;
-                          try {
-                              // Encontra o saque local pelo efiIdEnvio e status que ainda não foram finalizados
-                              withdrawalRecord = await this.withdrawalModel.findOne({
-                                  where: {
-                                     efiIdEnvio: idEnvio,
-                                     status: { [Op.in]: [WithdrawalStatus.PENDING, WithdrawalStatus.PROCESSING] }
-                                  },
-                                  transaction,
-                                  lock: transaction.LOCK.UPDATE, // Bloqueia o registro
-                              });
-
-                              if (!withdrawalRecord) {
-                                  this.logger.warn(`Webhook ENVIO PIX (idEnvio ${idEnvio}): Saque PENDING/PROCESSING NÃO encontrado ou já finalizado.`);
-                                  await transaction.commit();
-                                  continue; // Pula para o próximo item no array 'gnPix'
-                              }
-
-                              let newStatus: WithdrawalStatus | undefined = undefined;
-                              let estornarSaldo = false; // Indica se o saldo deve ser estornado (saque falhou)
-
-                              switch (statusEfí) {
-                                  case 'CONCLUIDA':
-                                      newStatus = WithdrawalStatus.COMPLETED;
-                                      // Não estorna saldo, pois o débito inicial já ocorreu na solicitação
-                                      break;
-                                  case 'NEGADA': // Saque negado pela Efí ou PSP destino
-                                  case 'ERRO': // Erro no processamento do saque pela Efí
-                                  case 'DEVOLVIDA': // Valor devolvido após a conclusão
-                                      newStatus = WithdrawalStatus.FAILED;
-                                      estornarSaldo = true; // Estorna o saldo que foi debitado na solicitação inicial
-                                      break;
-                                  case 'EM_PROCESSAMENTO':
-                                      // Se já está em PROCESSING, não precisa fazer nada no status local
-                                      if (withdrawalRecord.status !== WithdrawalStatus.PROCESSING) {
-                                          await withdrawalRecord.update({ status: WithdrawalStatus.PROCESSING }, { transaction });
-                                           this.logger.log(`Saque ${withdrawalRecord.id} (idEnvio ${idEnvio}) atualizado para EM_PROCESSAMENTO.`);
-                                      }
-                                      break;
-                                  default:
-                                      this.logger.warn(`Webhook ENVIO PIX (idEnvio ${idEnvio}): Status EFI desconhecido "${statusEfí}". Ignorando atualização de status para evitar inconsistência.`);
-                                      break; // Não atualiza status local
-                              }
-
-                              if (newStatus !== undefined) {
-                                  await withdrawalRecord.update({
-                                      status: newStatus,
-                                      efiE2eId: e2eId ?? withdrawalRecord.efiE2eId, // Atualiza e2eId se veio no webhook e não tínhamos
-                                  }, { transaction });
-                                  this.logger.log(`Saque ${withdrawalRecord.id} (idEnvio ${idEnvio}) atualizado para status local: ${newStatus}.`);
-
-                                  if (estornarSaldo) {
-                                      // Crédita o saldo de volta para o usuário
-                                      await this.authService.updateUserBalance(withdrawalRecord.userId, withdrawalRecord.amount, transaction);
-                                      this.logger.log(`Saldo de R$ ${withdrawalRecord.amount.toFixed(2)} estornado para o usuário ${withdrawalRecord.userId} (Saque ${withdrawalRecord.id}).`);
-                                  }
-                              }
-
-
-                              await transaction.commit();
-                              this.logger.log(`Processamento do webhook para saque ${withdrawalRecord.id} (idEnvio ${idEnvio}) concluído com sucesso.`);
-
-                          } catch (error: unknown) { // Catch explicitly typed as unknown
-                              if (transaction && !(transaction as any).finished) {
-                                  await transaction.rollback();
-                                  this.logger.warn(`Rollback executado para processamento de webhook (Saque, idEnvio ${idEnvio}) devido a error.`);
-                              }
-                              // --- CORREÇÃO: Acessar message e stack APENAS se for instância de Error ---
-                              let errorMessage = 'Unknown error';
-                               // --- CORREÇÃO: Definir errorStack como string | undefined ---
-                              let errorStack: string | undefined = undefined;
-
-                              if (error instanceof Error) {
-                                   errorMessage = error.message;
-                                   errorStack = error.stack;
-                              } else {
-                                   errorMessage = String(error);
-                              }
-                              this.logger.error(
-                                  `Error ao processar webhook para saque (idEnvio ${idEnvio}): ${errorMessage}`,
-                                  errorStack
-                              );
-                              // Continua para o próximo item mesmo em caso de erro no processamento de um item específico
-                          }
-                     } else {
-                        this.logger.warn(`Webhook da Efí recebeu um evento 'gnPix' com formato inesperado no detalhe: ${JSON.stringify(gnPixEventDetails)}`);
+  
+                 // --- Tentar encontrar e processar como SAQUE ---
+                 // Saques são Pix Enviados. Nosso registro de Withdrawal tem idEnvio e será atualizado com e2eId.
+                 // A notificação para um Saque REALIZADO/NAO_REALIZADO terá o idEnvio que criamos (se usado no /v3) e o e2eId.
+                   let withdrawal = await this.withdrawalModel.findOne({
+                       where: { idEnvio: idEnvio || null }, // Preferimos buscar pelo idEnvio que criamos
+                       include: [User]
+                   });
+                   // Fallback: Se não achou pelo idEnvio, tenta pelo e2eId (menos confiável, mas possível)
+                  if (!withdrawal && endToEndId) {
+                       withdrawal = await this.withdrawalModel.findOne({ where: { e2eId: endToEndId }, include: [User] }); // CORRIGIDO: Usar endToEndId
+                  }
+  
+  
+                 if (withdrawal) {
+                      this.logger.debug(`Webhook matched Withdrawal ID ${withdrawal.id}. Efí Status: ${status}. Local Status: ${withdrawal.status}.`);
+                     // Verifica se a notificação contém o motivo da falha (se aplicável)
+                     // A documentação não mostra o campo exato para o motivo na notificação de ENVIO,
+                     // mas se vier algo como 'motivo' ou 'rejection_reason', você pode extrair aqui:
+                     const motivoFalha = (notification as any).motivo || (notification as any).rejection_reason || null;
+                     if (motivoFalha) {
+                          this.logger.warn(`Motivo da falha para Saque ID ${withdrawal.id} (e2eId ${endToEndId}): ${motivoFalha}`);
+                         // Você pode salvar este motivo em uma nova coluna no modelo Withdrawal se quiser
                      }
-                } // Fim do loop sobre detalhes do array 'gnPix'
-            } // Fim if (eventGnPixEnvio && Array.isArray(eventGnPixEnvio))
-
-             // Se houver outros tipos de eventos no payload...
-            // ...adicione lógica aqui para processá-los com base na documentação da Efí
-             const otherEvents = Object.keys(event).filter(key => key !== 'pix' && key !== 'gnPix');
-             if (otherEvents.length > 0) {
-                 this.logger.warn(`Webhook da Efí recebeu tipos de evento não processados: ${otherEvents.join(', ')}. Evento completo: ${JSON.stringify(event)}`);
-             }
-
-
-      } // Fim do loop sobre o array principal de eventos
-
-       this.logger.log('Processamento de webhook(s) da Efí finalizado.');
-  }
-
-   async getUserDeposits(userId: number): Promise<Deposit[]> {
-       return this.depositModel.findAll({ where: { userId }, order: [['createdAt', 'DESC']] });
-   }
-
-   async getUserWithdrawals(userId: number): Promise<Withdrawal[]> {
-        return this.withdrawalModel.findAll({ where: { userId }, order: [['createdAt', 'DESC']] });
-    }
-
-    async getDepositDetails(id: number): Promise<Deposit> {
-        const deposit = await this.depositModel.findByPk(id);
-        if (!deposit) {
-            throw new NotFoundException('Depósito não encontrado.');
-        }
-        return deposit;
-    }
-
-    async getWithdrawalDetails(id: number): Promise<Withdrawal> {
-        const withdrawal = await this.withdrawalModel.findByPk(id);
-         if (!withdrawal) {
-             throw new NotFoundException('Saque não encontrado.');
-         }
-        return withdrawal;
-    }
-
-    // --- NOVO MÉTODO: CONSULTAR URL DO WEBHOOK REGISTRADO NA EFÍ ---
-    async getRegisteredWebhookUrl(pixKey: string): Promise<any | null> {
-        this.logger.log(`Consultando URL do webhook registrado na Efí para a chave: ${pixKey}`);
-        try {
-             // makeEfiRequest cuidará da obtenção do token e da chamada via Python
-            const efiResponse = await this.makeEfiRequest('get', `/v2/webhook/${pixKey}`);
-            this.logger.debug(`Resposta da Efí (via Python) ao consultar webhook: ${JSON.stringify(efiResponse)}`);
-
-            // A resposta de sucesso 200 para GET /v2/webhook/:chave é um JSON com {"webhookUrl": "...", "chave": "...", "criacao": "..."}, conforme documentação
-            if (efiResponse && efiResponse.webhookUrl) {
-                this.logger.log(`URL do webhook registrada na Efí para a chave ${pixKey}: ${efiResponse.webhookUrl}`);
-                return efiResponse; // Retorna o objeto completo, não apenas a URL
-            } else {
-                 this.logger.warn(`Nenhuma URL de webhook encontrada na Efí para a chave ${pixKey} ou resposta incompleta.`);
-                return null;
-            }
-
-        } catch (error: unknown) { // Catch explicitly typed as unknown
-             // --- CORREÇÃO: Acessar message e stack APENAS se for instância de Error ---
-             let errorMessage = 'Unknown error';
-             // --- CORREÇÃO: Definir errorStack como string | undefined ---
-             let errorStack: string | undefined = undefined;
-
-             if (error instanceof Error) {
-                  errorMessage = error.message;
-                  errorStack = error.stack;
-             } else {
-                  errorMessage = String(error);
-             }
-             this.logger.error(`Error ao consultar URL do webhook na Efí para a chave ${pixKey}: ${errorMessage}`, errorStack);
-
-             // makeEfiRequest já lança exceções NestJS para 4xx/5xx da API Efí
-             // Se for uma dessas, makeEfiRequest já as lança.
-             // Se for outro tipo de erro (execução do Python, parse), makeEfiRequest lança InternalServerError.
-             // Simplesmente re-lançamos a exceção que veio de makeEfiRequest.
-             throw error;
-        }
-    }
-     // --- FIM NOVO MÉTODO ---
-
-     // --- NOVO MÉTODO: SOLICITAR REENVIO DE WEBHOOK ---
-     async resendWebhook(e2eId: string): Promise<any> {
-         this.logger.log(`Solicitando reenvio de webhook para E2EId: ${e2eId}`);
-         const requestBody = {
-             tipo: "PIX_RECEBIDO", // Tipo de evento a ser reenviado (conforme documentação)
-             e2eids: [e2eId] // Array de E2E IDs para reenviar
-         };
-         try {
-              // makeEfiRequest cuidará da obtenção do token e da chamada via Python
-              // O endpoint responde 202 Accepted em caso de sucesso na solicitação
-              const efiResponse = await this.makeEfiRequest('post', '/v2/gn/webhook/reenviar', requestBody);
-              this.logger.log(`Solicitação de reenvio de webhook para ${e2eId} enviada. Resposta: ${JSON.stringify(efiResponse)}`);
-             return efiResponse; // A resposta da Efí para 202 é vazia ou simples, makeEfiRequest retorna o que vier
-         } catch (error: unknown) { // Catch explicitly typed as unknown
-              // --- CORREÇÃO: Acessar message e stack APENAS se for instância de Error ---
-              let errorMessage = 'Unknown error';
-               // --- CORREÇÃO: Definir errorStack como string | undefined ---
-              let errorStack: string | undefined = undefined;
-
-              if (error instanceof Error) {
-                   errorMessage = error.message;
-                   errorStack = error.stack;
-              } else {
-                   errorMessage = String(error);
+  
+                     await this._updateWithdrawalStatusFromWebhook(withdrawal, status, endToEndId);
+                     continue; // Processado como saque, vai para o próximo item do webhook
+                 }
+  
+                 // Se chegou aqui, a notificação não corresponde a nenhum registro local conhecido
+                 this.logger.warn(`Webhook Pix notification with e2eId ${endToEndId}, txid ${txid}, idEnvio ${idEnvio}, status ${status} did not match any local Deposit or Withdrawal record.`);
+  
+  
+              } catch (error) {
+                  const err = error as Error;
+                  // Captura e loga erros ao processar UM item da notificação para não impedir os outros.
+                  this.logger.error(`Error processing single webhook notification item (e2eId: ${notification?.endToEndId || 'N/A'}): ${err.message}`, err.stack);
               }
-              this.logger.error(`Error ao solicitar reenvio de webhook para ${e2eId}: ${errorMessage}`, errorStack);
-
-              // makeEfiRequest já lança exceções NestJS para 4xx/5xx da API Efí
-              // Simplesmente re-lançamos a exceção que veio de makeEfiRequest.
-              throw error;
+          }
+     }
+  
+    /**
+     * Gera um txid alfanumérico válido para a API Efí (26 a 35 caracteres).
+     * Utiliza UUID e timestamp, removendo caracteres inválidos e garantindo o tamanho mínimo/máximo.
+     * @param prefix Prefixo opcional para identificar o tipo de transação (ex: 'dep', 'saq').
+     * @param entityId ID da entidade local (depósito, saque) para garantir unicidade.
+     * @returns String alfanumérica entre 26 e 35 caracteres.
+     */
+    private generateEfiTxid(prefix: string, entityId: number): string { // CORRIGIDO: Método definido como private
+         const base = `${prefix}${entityId}${Date.now()}${uuidv4()}`.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  
+         let txid = base;
+         while (txid.length < 26) {
+             txid += base;
+         }
+         txid = txid.substring(0, 35);
+  
+         return txid;
+    }
+  
+  
+    /**
+     * Atualiza o status de um Depósito local com base em uma notificação de webhook.
+     * Se o status da Efí for CONCLUIDA e o depósito local ainda PENDING, credita o saldo.
+     * @param deposit Instância do Depósito local.
+     * @param efiStatus O status da Efí vindo do webhook ('ATIVA', 'CONCLUIDA', 'REMOVIDA_*').
+     * @param e2eId O End-to-End ID da notificação.
+     * @returns Promise<void>
+     */
+    private async _updateDepositStatusFromWebhook(deposit: Deposit, efiStatus: string, e2eId?: string): Promise<void> { // CORRIGIDO: Método definido como private
+         // Só processa se o depósito local ainda não tem um status final (PENDING)
+         if ((deposit.status as string) !== DepositStatus.PENDING) {
+             this.logger.debug(`_updateDepositStatusFromWebhook: Depósito ID ${deposit.id} já não está PENDING (${deposit.status}). Ignorando notificação de status ${efiStatus}.`);
+             return;
+         }
+  
+         let newStatus: DepositStatus | undefined = undefined;
+         let transaction: Transaction | undefined;
+  
+         if (efiStatus === 'CONCLUIDA') {
+             transaction = await this.sequelize.transaction();
+             try {
+                 newStatus = DepositStatus.COMPLETED;
+                 await deposit.update({
+                     status: newStatus,
+                     e2eId: e2eId || deposit.e2eId, // Atualiza e2eId se a notificação o fornecer
+                 }, { transaction });
+  
+                 await this.authService.updateUserBalance(deposit.userId, Number(deposit.amount), transaction);
+                 this.logger.log(`_updateDepositStatusFromWebhook: Saldo do usuário ${deposit.userId} creditado em ${deposit.amount} para depósito ${deposit.id} via webhook.`);
+  
+                 await transaction.commit();
+                 this.logger.log(`_updateDepositStatusFromWebhook: Depósito local ${deposit.id} (txid ${deposit.txid}) marcado como CONCLUIDO via webhook.`);
+  
+             } catch (dbError) {
+                 if (transaction) await transaction.rollback();
+                 const err = dbError as Error;
+                 this.logger.error(`_updateDepositStatusFromWebhook: Erro DB ao marcar depósito ${deposit.id} como CONCLUIDO e atualizar saldo via webhook: ${err.message}`, err.stack);
+                 throw new InternalServerErrorException('Erro interno ao finalizar depósito e creditar saldo via webhook. Verifique logs.');
+             }
+  
+         } else if (efiStatus === 'REMOVIDA_PELO_USUARIO_RECEBEDOR' || efiStatus === 'REMOVIDA_PELO_PSP') {
+             newStatus = DepositStatus.CANCELLED;
+             await deposit.update({ status: newStatus, e2eId: e2eId || deposit.e2eId });
+  
+             this.logger.log(`_updateDepositStatusFromWebhook: Depósito local ${deposit.id} (txid ${deposit.txid}) marcado como CANCELADO via webhook.`);
+  
+         } // Status 'ATIVA' da Efí não requer mudança no status PENDING local.
+  
+  
+         // Opcional: Se o e2eId veio na notificação e ainda não está salvo localmente
+         if (e2eId && e2eId !== deposit.e2eId && newStatus === undefined) {
+               await deposit.update({ e2eId: e2eId });
+               this.logger.debug(`_updateDepositStatusFromWebhook: e2eId para depósito local ${deposit.id} atualizado para ${e2eId} via webhook.`);
          }
      }
-     // --- FIM NOVO MÉTODO ---
-
-
-    async configureEfiWebhook(): Promise<any> {
-         this.logger.log('Solicitando configuração do webhook na API da Efí...');
-
-         const pixKey = this.configService.get<string>('EFI_PIX_KEY');
-         const webhookSecret = this.configService.get<string>('EFI_WEBHOOK_SECRET');
-         const publicHost = 'https://jackbear-lotoapi.r954jc.easypanel.host';
-
-         if (!pixKey) {
-              const msg = 'Chave Pix da Efí (EFI_PIX_KEY) não configurada no .env.';
-              this.logger.error(msg);
-              throw new InternalServerErrorException(msg);
+  
+  
+    /**
+     * Atualiza o status de um Saque local com base em uma notificação de webhook.
+     * Se o status da Efí for NAO_REALIZADO e o saque local ainda PROCESSING, reembolsa o saldo.
+     * @param withdrawal Instância do Saque local.
+     * @param efiStatus O status da Efí vindo do webhook ('EM_PROCESSAMENTO', 'REALIZADO', 'NAO_REALIZADO').
+     * @param e2eId O End-to-End ID da notificação.
+     * @returns Promise<void>
+     */
+     private async _updateWithdrawalStatusFromWebhook(withdrawal: Withdrawal, efiStatus: string, e2eId?: string): Promise<void> { // CORRIGIDO: Método definido como private
+         // Só processa se o saque local ainda não tem um status final (PROCESSING)
+         if ((withdrawal.status as string) !== WithdrawalStatus.PROCESSING) {
+             this.logger.debug(`_updateWithdrawalStatusFromWebhook: Saque ID ${withdrawal.id} já não está PROCESSING (${withdrawal.status}). Ignorando notificação de status ${efiStatus}.`);
+             return;
          }
-         if (!webhookSecret) {
-             const msg = 'Segredo do Webhook da Efí (EFI_WEBHOOK_SECRET) não configurado no .env.';
-             this.logger.error(msg);
-             throw new InternalServerErrorException(msg);
+  
+          let newStatus: WithdrawalStatus | undefined = undefined;
+          let transaction: Transaction | undefined;
+  
+  
+         if (efiStatus === 'REALIZADO') {
+             newStatus = WithdrawalStatus.COMPLETED;
+             await withdrawal.update({
+                 status: newStatus,
+                 e2eId: e2eId || withdrawal.e2eId,
+             }); // Update simples sem transação (saldo já foi deduzido)
+  
+             this.logger.log(`_updateWithdrawalStatusFromWebhook: Saque local ${withdrawal.id} (idEnvio ${withdrawal.idEnvio}) marcado como COMPLETED via webhook.`);
+  
+         } else if (efiStatus === 'NAO_REALIZADO') {
+              // Iniciar transação para atualizar status e reembolsar saldo atomicamente
+             transaction = await this.sequelize.transaction();
+             try {
+                 newStatus = WithdrawalStatus.FAILED;
+                 await withdrawal.update({ status: newStatus, e2eId: e2eId || withdrawal.e2eId }, { transaction });
+  
+                 await this.authService.updateUserBalance(withdrawal.userId, Number(withdrawal.amount), transaction);
+                 this.logger.log(`_updateWithdrawalStatusFromWebhook: Saldo do usuário ${withdrawal.userId} creditado em ${withdrawal.amount} para saque falho ${withdrawal.id} via webhook.`);
+  
+                 await transaction.commit();
+                 this.logger.log(`_updateWithdrawalStatusFromWebhook: Saque local ${withdrawal.id} (idEnvio ${withdrawal.idEnvio}) marcado como FAILED e saldo reembolsado via webhook.`);
+  
+             } catch (dbError) {
+                  if (transaction) await transaction.rollback();
+                 const err = dbError as Error;
+                 this.logger.error(`_updateWithdrawalStatusFromWebhook: Erro DB ao marcar saque ${withdrawal.id} como FAILED e reembolsar via webhook: ${err.message}`, err.stack);
+                 throw new InternalServerErrorException('Erro interno ao processar falha de saque e reembolso via webhook. Verifique logs.');
+             }
+  
+         } // Status 'EM_PROCESSAMENTO' da Efí não requer mudança no status PROCESSING local.
+  
+  
+          // Opcional: Se o e2eId veio na notificação e ainda não está salvo localmente
+          if (e2eId && e2eId !== withdrawal.e2eId && newStatus === undefined) {
+               await withdrawal.update({ e2eId: e2eId });
+               this.logger.debug(`_updateWithdrawalStatusFromWebhook: e2eId para saque local ${withdrawal.id} atualizado para ${e2eId} via webhook.`);
          }
-
-         // O token é obtido dentro do makeEfiRequest
-
-         // IMPORTANTE: Esta é a URL que a Efí CHAMA para o TESTE de configuração e que você REGISTRA.
-         // A Efí adicionará '/pix' para as notificações REAIS depois da configuração.
-         // Sua aplicação precisa ter uma rota POST que responda a ESTA URL EXATA para o teste.
-         const webhookUrlToEfí = `${publicHost}/pix/webhook/${webhookSecret}`;
-
-         this.logger.debug(`Configurando webhook para a chave Pix: ${pixKey} com URL: ${webhookUrlToEfí}`);
-
-         const requestBody = {
-             webhookUrl: webhookUrlToEfí
-         };
-
-         // Headers específicos para a requisição PUT /v2/webhook/:chave
-         const extraConfig: AxiosRequestConfig = {
-              headers: {
-                   'x-skip-mtls-checking': 'true', // Usando skip-mTLS conforme sua necessidade
-                   // O header Authorization Bearer será adicionado pelo makeEfiRequest
-              },
-         };
-
-
-         try {
-              // makeEfiRequest cuidará da obtenção do token e da chamada via Python
-              // Este endpoint responde 201 Created em caso de sucesso na configuração
-             const efiResponse = await this.makeEfiRequest('put', `/v2/webhook/${pixKey}`, requestBody, extraConfig);
-
-             this.logger.log(`Configuração do webhook na Efí solicitada com sucesso. Resposta: ${JSON.stringify(efiResponse)}`);
-             return efiResponse;
-
-         } catch (error: unknown) { // Catch explicitly typed as unknown
-              // --- CORREÇÃO: Acessar message e stack APENAS se for instância de Error ---
-              let errorMessage = 'Unknown error';
-               // --- CORREÇÃO: Definir errorStack como string | undefined ---
-              let errorStack: string | undefined = undefined;
-
-              if (error instanceof Error) {
-                   errorMessage = error.message;
-                   errorStack = error.stack;
-              } else {
-                   errorMessage = String(error);
+     }
+  
+  
+    // --- Métodos de Negócio Principais (Chamados pelo Controller) ---
+     public async createDepositCharge(userId: number, amount: number): Promise<Deposit> { // CORRIGIDO: Método definido como public
+         // ... código existente ...
+          const user = await this.authService.findCurrentUser(userId);
+          if (!user) {
+          throw new NotFoundException(`Usuário com ID ${userId} não encontrado.`);
+          }
+  
+          const transaction = await this.sequelize.transaction();
+          let deposit: Deposit | undefined;
+  
+          try {
+              deposit = await this.depositModel.create({
+              userId: userId,
+              amount: amount,
+              status: DepositStatus.PENDING,
+              provider: 'EFI_PIX',
+              }, { transaction });
+              this.logger.debug(`Registro de depósito local ${deposit.id} criado para userId ${userId}, valor ${amount}.`);
+  
+              // Chamar método privado generateEfiTxid
+              const customTxid = this.generateEfiTxid('DEP', deposit.id);
+              this.logger.debug(`Txid gerado para Efí: ${customTxid}`);
+  
+  
+              const accessToken = await this.getAccessToken();
+              const chargeUrl = `${this.efiBaseUrl}/v2/cob/${customTxid}`;
+  
+              const formattedCpf = user.cpf.replace(/\D/g, '');
+              if (formattedCpf.length !== 11) {
+                  this.logger.error(`CPF do usuário ${user.id} (${user.cpf}) não formatável para 11 dígitos numéricos.`);
+                  throw new BadRequestException('CPF do usuário inválido para criação da cobrança Pix.');
               }
-
-              this.logger.error(`Error inesperado ao configurar webhook na Efí para a chave ${pixKey}: ${errorMessage}`, errorStack);
-
-             // makeEfiRequest já lança exceções NestJS para 4xx/5xx da API Efí (incluindo BadRequest por 'webhook_invalido')
-             // Simplesmente re-lançamos a exceção que veio de makeEfiRequest.
-             throw error;
-         }
+  
+  
+              const requestBody = {
+              calendario: {
+                  expiracao: 3600,
+              },
+              devedor: {
+                  cpf: formattedCpf,
+                  nome: user.name,
+              },
+              valor: {
+                  original: Number(amount).toFixed(2),
+              },
+              chave: this.efiPixKey,
+              solicitacaoPagador: `Deposito de saldo para ${user.name} (#${user.id}) - Ref: ${deposit.id}`,
+              };
+  
+              this.logger.debug(`Chamando PUT para ${chargeUrl} na Efí. Body: ${JSON.stringify(requestBody)}`);
+              if (!this.httpsAgent) {
+                  throw new InternalServerErrorException('HTTPS Agent não inicializado. Serviço Pix não está pronto.');
+              }
+  
+              const response = await firstValueFrom(this.httpService.put(chargeUrl, requestBody, {
+              headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  'Content-Type': 'application/json',
+              },
+              httpsAgent: this.httpsAgent,
+              }));
+              this.logger.debug(`Resposta recebida de ${chargeUrl}. Status: ${response.status}. Data: ${JSON.stringify(response.data)}`);
+  
+              await deposit.update({
+              txid: response.data.txid,
+              locationId: response.data.loc?.id,
+              pixCopiaECola: response.data.pixCopiaECola,
+              }, { transaction });
+  
+              this.logger.debug(`Registro de depósito local ${deposit.id} atualizado com dados da Efí (txid, locationId).`);
+  
+              if (!response.data.loc?.id) {
+                  this.logger.warn(`Cobrança ${deposit.id} criada na Efí, mas sem location ID na resposta. Não será possível obter imagem QR Code.`);
+              } else {
+                  try {
+                      // Chamar método privado getQrCodeImage
+                      const qrCodeData = await this.getQrCodeImage(response.data.loc.id);
+                      await deposit.update({
+                          qrCodeImage: qrCodeData.imagemQrcode,
+                      }, { transaction });
+                      this.logger.debug(`Imagem QR Code para depósito local ${deposit.id} obtida e salva.`);
+                  } catch (qrError) {
+                      const err = qrError as Error;
+                      this.logger.error(`Falha ao obter imagem QR Code para location ${response.data.loc.id}: ${err.message}`, err.stack);
+                  }
+              }
+  
+              await transaction.commit();
+  
+              this.logger.log(`Processo inicial de depósito Pix ${deposit.id} para userId ${userId} concluído. Txid Efí: ${customTxid}.`);
+              return deposit;
+  
+          } catch (error) {
+              await transaction.rollback();
+              const axiosError = error as AxiosError;
+  
+              const depositIdLog = deposit ? deposit.id : 'N/A';
+              this.logger.error(`Erro crítico durante a criação da cobrança de depósito ${depositIdLog} na Efí para userId ${userId}: ${(error as Error).message}`, (error as Error).stack);
+  
+              if (axiosError.response) {
+                  const errorData: any = axiosError.response.data;
+                  this.logger.error(`Efí API Response Error (Create Charge): Status ${axiosError.response.status}, Data: ${JSON.stringify(errorData)}`);
+                  this.logger.error(`Efí API Response Error (Create Charge) Headers: ${JSON.stringify(axiosError.response.headers)}`);
+                  this.logger.error(`Efí API Response Error (Create Charge) Config: ${JSON.stringify(axiosError.config)}`);
+                  if (axiosError.response.status >= 400 && axiosError.response.status < 500) {
+                      throw new BadRequestException(`Erro da API Efí ao criar cobrança: ${errorData?.detail || errorData?.mensagem || 'Detalhe não disponível'}`);
+                  }
+              } else if (axiosError.request) {
+                  this.logger.error(`Efí API Request Error (Create Charge): No response received.`, axiosError.request);
+                  this.logger.error(`Efí API Request Error (Create Charge) Config: ${JSON.stringify(axiosError.config)}`);
+              }
+  
+              throw new InternalServerErrorException('Erro interno ao solicitar depósito Pix. Tente novamente.');
+          }
     }
-
-}
+  
+    // Método privado para obter a imagem do QR Code
+     private async getQrCodeImage(locationId: number): Promise<{ qrcode: string, imagemQrcode: string }> { // CORRIGIDO: Método definido como private
+          this.logger.debug(`Buscando imagem QR Code para locationId ${locationId} na Efí.`);
+          const accessToken = await this.getAccessToken();
+          const qrcodeUrl = `${this.efiBaseUrl}/v2/loc/${locationId}/qrcode`;
+  
+          try {
+              if (!this.httpsAgent) {
+                   throw new InternalServerErrorException('HTTPS Agent não inicializado. Serviço Pix não está pronto.');
+              }
+               this.logger.debug(`Fazendo GET para ${qrcodeUrl} para obter QR Code...`);
+               const response = await firstValueFrom(this.httpService.get(qrcodeUrl, {
+                   headers: {
+                       Authorization: `Bearer ${accessToken}`,
+                   },
+                   httpsAgent: this.httpsAgent,
+               }));
+               this.logger.debug(`Resposta recebida de ${qrcodeUrl}. Status: ${response.status}. Data: ${JSON.stringify(response.data)}`);
+  
+               this.logger.debug(`Imagem QR Code obtenida para locationId ${locationId}.`);
+               return response.data;
+  
+          } catch (error) {
+               const axiosError = error as AxiosError;
+               this.logger.error(`Erro ao obter imagem QR Code da Efí para locationId ${locationId}: ${(error as Error).message}`, (error as Error).stack);
+  
+               if (axiosError.response) {
+                   const errorData: any = axiosError.response.data;
+                   this.logger.error(`Efí API Response Error (Get QR Code): Status ${axiosError.response.status}, Data: ${JSON.stringify(errorData)}`);
+                    this.logger.error(`Efí API Response Error (Get QR Code) Headers: ${JSON.stringify(axiosError.response.headers)}`);
+                    this.logger.error(`Efí API Response Error (Get QR Code) Config: ${JSON.stringify(axiosError.config)}`);
+                    if (axiosError.response.status === 404) {
+                         throw new NotFoundException(`Location ID ${locationId} não encontrado na Efí.`);
+                    }
+                    if (axiosError.response.status >= 400 && axiosError.response.status < 500) {
+                        throw new BadRequestException(`Erro da API Efí ao obter QR Code: ${errorData?.detail || errorData?.mensagem || 'Detalhe não disponível'}`);
+                    }
+               } else if (axiosError.request) {
+                    this.logger.error(`Efí API Request Error (Get QR Code): No response received.`, axiosError.request);
+                    this.logger.error(`Efí API Request Error (Get QR Code) Config: ${JSON.stringify(axiosError.config)}`);
+                }
+  
+               throw new InternalServerErrorException('Falha ao obter imagem QR Code do Pix.');
+          }
+     }
+  
+    // Método público para consultar o status ATUAL de um depósito na Efí (chamado pelo Controller GET /status)
+    public async checkDepositStatusEfí(depositId: number): Promise<{ status: string, e2eId?: string, valor: string }> { // CORRIGIDO: Método definido como public
+          const deposit = await this.depositModel.findByPk(depositId);
+  
+          if (!deposit) {
+              throw new NotFoundException(`Depósito com ID ${depositId} não encontrado.`);
+          }
+  
+          if (!deposit.txid) {
+             const statusLocal = deposit.status as string;
+             this.logger.warn(`checkDepositStatusEfí: Depósito ${deposit.id} não possui txid para consulta na Efí. Status local: ${statusLocal}.`);
+             return { status: statusLocal, e2eId: deposit.e2eId, valor: Number(deposit.amount).toFixed(2) };
+          }
+  
+          this.logger.debug(`checkDepositStatusEfí: Consultando status da cobrança Pix na Efí para Deposit ID ${deposit.id}, txid ${deposit.txid}.`);
+  
+          const accessToken = await this.getAccessToken();
+          const chargeUrl = `${this.efiBaseUrl}/v2/cob/${deposit.txid}`;
+  
+          try {
+              if (!this.httpsAgent) {
+                   throw new InternalServerErrorException('HTTPS Agent não inicializado. Serviço Pix não está pronto.');
+              }
+              this.logger.debug(`checkDepositStatusEfí: Fazendo GET para ${chargeUrl} para consultar status...`);
+              const response = await firstValueFrom(this.httpService.get(chargeUrl, {
+                  headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  },
+                  httpsAgent: this.httpsAgent,
+              }));
+              this.logger.debug(`checkDepositStatusEfí: Resposta recebida de ${chargeUrl}. Status: ${response.status}. Data: ${JSON.stringify(response.data)}`);
+  
+              const efiStatus = response.data.status;
+              const e2eId = response.data.pix && response.data.pix.length > 0 ? response.data.pix[0].endToEndId : undefined;
+               const valor = response.data.valor?.original || response.data.valor?.final;
+  
+              this.logger.debug(`checkDepositStatusEfí: Status retornado pela Efí para txid ${deposit.txid} (Deposit ID ${deposit.id}): ${efiStatus}`);
+  
+               return { status: efiStatus, e2eId: e2eId, valor: valor };
+  
+  
+          } catch (error) {
+              const axiosError = error as AxiosError;
+              this.logger.error(`checkDepositStatusEfí: Erro ao consultar status de depósito na Efí para Deposit ID ${deposit.id}, txid ${deposit.txid}: ${(error as Error).message}`, (error as Error).stack);
+  
+               if (axiosError.response) {
+                   const errorData: any = axiosError.response.data;
+                   this.logger.error(`checkDepositStatusEfí: Efí API Response Error (Get Cob): Status ${axiosError.response.status}, Data: ${JSON.stringify(errorData)}`);
+                   this.logger.error(`checkDepositStatusEfí: Efí API Response Error (Get Cob) Headers: ${JSON.stringify(axiosError.response.headers)}`);
+                   this.logger.error(`checkDepositStatusEfí: Efí API Response Error (Get Cob) Config: ${JSON.stringify(axiosError.config)}`);
+  
+                   if (axiosError.response.status === 404) {
+                        throw new NotFoundException(`Cobrança com txid ${deposit.txid} não encontrada na Efí.`);
+                   }
+                    if (axiosError.response.status >= 400 && axiosError.response.status < 500) {
+                        throw new BadRequestException(`Erro 4xx da API Efí ao consultar cobrança: ${errorData?.detail || errorData?.mensagem || 'Detalhe não disponível'}`);
+                    }
+               } else if (axiosError.request) {
+                   this.logger.error(`checkDepositStatusEfí: Efí API Request Error (Get Cob): No response received.`, axiosError.request);
+                   this.logger.error(`checkDepositStatusEfí: Efí API Request Error (Get Cob) Config: ${JSON.stringify(axiosError.config)}`);
+               }
+  
+              throw new InternalServerErrorException('Erro ao consultar status de depósito na API Pix Efí.');
+          }
+     }
+  
+    // Método público para requisitar um saque (chamado pelo Controller POST /pix/withdrawal/request)
+    public async requestWithdrawal( // CORRIGIDO: Método definido como public
+        userId: number,
+        amount: number,
+        pixKey: string,
+        pixKeyType: string,
+        favorecidoName?: string,
+        favorecidoCpfCnpj?: string
+    ): Promise<Withdrawal> {
+       // Chamar método privado generateEfiTxid
+       const idEnvio = this.generateEfiTxid('SAQ', userId);
+       this.logger.debug(`IdEnvio gerado para Efí: ${idEnvio}`);
+  
+  
+       const transaction = await this.sequelize.transaction();
+       let withdrawal: Withdrawal | undefined;
+  
+       try {
+           this.logger.debug(`requestWithdrawal: Dedução de saldo ${amount} para userId ${userId} na transação DB.`);
+           const user = await this.authService.updateUserBalance(userId, -Number(amount), transaction)
+               .catch(error => {
+                   if ((error as any).isHandled && error instanceof Error && error.message === 'Insufficient balance during transaction') {
+                       throw new BadRequestException('Saldo insuficiente para realizar o saque.');
+                   }
+                   throw error;
+               });
+           this.logger.log(`requestWithdrawal: Saldo do usuário ${userId} deduzido em ${amount}. Saldo atual (transacional): ${user.balance}`);
+  
+  
+           withdrawal = await this.withdrawalModel.create({
+               userId: userId,
+               idEnvio: idEnvio,
+               amount: amount,
+               pixKey: pixKey,
+               pixKeyType: pixKeyType,
+               favorecidoName: favorecidoName,
+               favorecidoCpfCnpj: favorecidoCpfCnpj,
+               status: WithdrawalStatus.PROCESSING,
+               provider: 'EFI_PIX',
+           }, { transaction });
+           this.logger.debug(`requestWithdrawal: Registro de saque local ${withdrawal.id} criado com idEnvio ${idEnvio} para userId ${userId}.`);
+  
+  
+           const accessToken = await this.getAccessToken();
+           const withdrawalUrl = `${this.efiBaseUrl}/v3/gn/pix/${idEnvio}`;
+  
+           let formattedFavorecidoCpfCnpj: string | undefined = undefined;
+           if (pixKeyType === 'cpf' && favorecidoCpfCnpj) {
+               formattedFavorecidoCpfCnpj = favorecidoCpfCnpj.replace(/\D/g, '');
+               if (formattedFavorecidoCpfCnpj.length !== 11) {
+                   this.logger.warn(`requestWithdrawal: CPF do favorecido ${favorecidoCpfCnpj} inválido para tipo CPF.`);
+               }
+           } else if (pixKeyType === 'cnpj' && favorecidoCpfCnpj) {
+               formattedFavorecidoCpfCnpj = favorecidoCpfCnpj.replace(/\D/g, '');
+               if (formattedFavorecidoCpfCnpj.length !== 14) {
+                    this.logger.warn(`requestWithdrawal: CNPJ do favorecido ${favorecidoCpfCnpj} inválido para tipo CNPJ.`);
+               }
+           }
+  
+  
+           const requestBody: any = {
+                valor: Number(amount).toFixed(2),
+                pagador: {
+                     chave: this.efiPixKey,
+                     infoPagador: `Saque #${withdrawal.id} solicitado por usuário ${user.id}`,
+                },
+                favorecido: {
+                     chave: pixKey,
+                     ...(pixKeyType === 'cpf' || pixKeyType === 'cnpj' ? {
+                          identificacao: {
+                               nome: favorecidoName,
+                               cpf: pixKeyType === 'cpf' ? formattedFavorecidoCpfCnpj : undefined,
+                               cnpj: pixKeyType === 'cnpj' ? formattedFavorecidoCpfCnpj : undefined,
+                          }
+                     } : {}),
+                },
+           };
+  
+           this.logger.debug(`requestWithdrawal: Chamando PUT para ${withdrawalUrl} na Efí. Body: ${JSON.stringify(requestBody)}`);
+           if (!this.httpsAgent) {
+               throw new InternalServerErrorException('HTTPS Agent não inicializado. Serviço Pix não está pronto.');
+           }
+  
+           const response = await firstValueFrom(this.httpService.put(withdrawalUrl, requestBody, {
+               headers: {
+                   Authorization: `Bearer ${accessToken}`,
+                   'Content-Type': 'application/json',
+               },
+               httpsAgent: this.httpsAgent,
+           }));
+           this.logger.debug(`requestWithdrawal: Resposta recebida de ${withdrawalUrl}. Status: ${response.status}. Data: ${JSON.stringify(response.data)}`);
+  
+  
+           await withdrawal.update({
+               e2eId: response.data.e2eId,
+           }, { transaction });
+  
+           this.logger.debug(`requestWithdrawal: Registro de saque local ${withdrawal.id} atualizado com e2eId Efí: ${response.data.e2eId}.`);
+  
+           await transaction.commit();
+  
+           this.logger.log(`requestWithdrawal: Solicitação de saque local ${withdrawal.id} (idEnvio ${withdrawal.idEnvio}) enviada para Efí com sucesso. Status local: PROCESSING.`);
+           return withdrawal;
+  
+       } catch (error) {
+           await transaction.rollback();
+           const axiosError = error as AxiosError;
+  
+           const withdrawalIdLog = withdrawal ? withdrawal.id : 'N/A';
+           this.logger.error(`requestWithdrawal: Erro crítico durante a solicitação de saque Pix para userId ${userId}, valor ${amount}, chave ${pixKey} (ID Local: ${withdrawalIdLog}): ${(error as Error).message}`, (error as Error).stack);
+  
+           if (error instanceof BadRequestException) {
+                throw error;
+           }
+  
+            if (axiosError.response) {
+               const errorData: any = axiosError.response.data;
+               this.logger.error(`requestWithdrawal: Efí API Response Error (Request Pix Send): Status ${axiosError.response.status}, Data: ${JSON.stringify(errorData)}`);
+                this.logger.error(`requestWithdrawal: Efí API Response Error (Request Pix Send) Headers: ${JSON.stringify(axiosError.response.headers)}`);
+                this.logger.error(`requestWithdrawal: Efí API Response Error (Request Pix Send) Config: ${JSON.stringify(axiosError.config)}`);
+                if (axiosError.response.status >= 400 && axiosError.response.status < 500) {
+                    const efierrordetail = errorData?.detail || errorData?.mensagem || 'Detalhe não disponível';
+                     this.logger.error(`requestWithdrawal: Erro 4xx da API Efí ao solicitar envio Pix: ${efierrordetail}`);
+                    throw new BadRequestException(`Erro da API Efí ao solicitar saque: ${efierrordetail}`);
+                }
+           } else if (axiosError.request) {
+                this.logger.error(`requestWithdrawal: Efí API Request Error (Request Pix Send): No response received.`, axiosError.request);
+                 this.logger.error(`requestWithdrawal: Efí API Request Error (Request Pix Send) Config: ${JSON.stringify(axiosError.config)}`);
+            }
+  
+           throw new InternalServerErrorException('Erro interno ao solicitar saque Pix. Tente novamente.');
+       }
+    }
+  
+    // Método público para consultar o status ATUAL de um saque na Efí (chamado pelo Controller GET /status)
+     public async checkWithdrawalStatusEfí(withdrawalId: number): Promise<{ status: string, e2eId?: string, valor: string }> { // CORRIGIDO: Método definido como public
+         const withdrawal = await this.withdrawalModel.findByPk(withdrawalId);
+  
+         if (!withdrawal) {
+             throw new NotFoundException(`Saque com ID ${withdrawalId} não encontrado.`);
+         }
+  
+         if (!withdrawal.idEnvio) {
+             const statusLocal = withdrawal.status as string;
+             this.logger.warn(`checkWithdrawalStatusEfí: Saque local ${withdrawal.id} não possui idEnvio para consulta na Efí. Status local: ${statusLocal}.`);
+             return { status: statusLocal, e2eId: withdrawal.e2eId, valor: Number(withdrawal.amount).toFixed(2) };
+         }
+  
+  
+         this.logger.debug(`checkWithdrawalStatusEfí: Consultando status de envio Pix na Efí para Withdrawal ID ${withdrawal.id}, idEnvio ${withdrawal.idEnvio}.`);
+  
+         const accessToken = await this.getAccessToken();
+         const withdrawalStatusUrl = `${this.efiBaseUrl}/v2/gn/pix/enviados/id-envio/${withdrawal.idEnvio}`;
+  
+         try {
+             if (!this.httpsAgent) {
+                  throw new InternalServerErrorException('HTTPS Agent não inicializado. Serviço Pix não está pronto.');
+             }
+             this.logger.debug(`checkWithdrawalStatusEfí: Fazendo GET para ${withdrawalStatusUrl} para consultar status...`);
+             const response = await firstValueFrom(this.httpService.get(withdrawalStatusUrl, {
+                 headers: {
+                     Authorization: `Bearer ${accessToken}`,
+                 },
+                 httpsAgent: this.httpsAgent,
+             }));
+              this.logger.debug(`checkWithdrawalStatusEfí: Resposta recebida de ${withdrawalStatusUrl}. Status: ${response.status}. Data: ${JSON.stringify(response.data)}`);
+  
+  
+             const efiStatus = response.data.status; // 'EM_PROCESSAMENTO', 'REALIZADO', 'NAO_REALIZADO'
+             const e2eId = response.data.endToEndId;
+              const valor = response.data.valor;
+  
+             this.logger.debug(`checkWithdrawalStatusEfí: Status retornado pela Efí para idEnvio ${withdrawal.idEnvio} (Withdrawal ID ${withdrawal.id}): ${efiStatus}`);
+  
+             return { status: efiStatus, e2eId: e2eId, valor: valor };
+  
+  
+         } catch (error) {
+              const axiosError = error as AxiosError;
+              this.logger.error(`checkWithdrawalStatusEfí: Erro ao consultar status de saque na Efí para Withdrawal ID ${withdrawal.id}, idEnvio ${withdrawal.idEnvio}: ${(error as Error).message}`, (error as Error).stack);
+  
+              if (axiosError.response) {
+                 const errorData: any = axiosError.response.data;
+                 this.logger.error(`checkWithdrawalStatusEfí: Efí API Response Error (Get Pix Enviados): Status ${axiosError.response.status}, Data: ${JSON.stringify(errorData)}`);
+                  this.logger.error(`checkWithdrawalStatusEfí: Efí API Response Error (Get Pix Enviados) Headers: ${JSON.stringify(axiosError.response.headers)}`);
+                  this.logger.error(`checkWithdrawalStatusEfí: Efí API Response Error (Get Pix Enviados) Config: ${JSON.stringify(axiosError.config)}`);
+                  if (axiosError.response.status === 404) {
+                       throw new NotFoundException(`Envio de Pix com idEnvio ${withdrawal.idEnvio} não encontrado na Efí.`);
+                  }
+                 if (axiosError.response.status >= 400 && axiosError.response.status < 500) {
+                     throw new BadRequestException(`Erro 4xx da API Efí ao consultar envio Pix: ${errorData?.detail || errorData?.mensagem || 'Detalhe não disponível'}`);
+                 }
+  
+             } else if (axiosError.request) {
+                 this.logger.error(`checkWithdrawalStatusEfí: Efí API Request Error (Get Pix Enviados): No response received.`, axiosError.request);
+                  this.logger.error(`checkWithdrawalStatusEfí: Efí API Request Error (Get Pix Enviados) Config: ${JSON.stringify(axiosError.config)}`);
+             }
+  
+              throw new InternalServerErrorException('Erro ao consultar status de saque na API Pix Efí.');
+         }
+     }
+  
+  
+    // --- Métodos para Histórico ---
+    public async getUserDeposits(userId: number): Promise<Deposit[]> { // CORRIGIDO: Método definido como public
+         const user = await this.authService.findCurrentUser(userId);
+         if (!user) {
+             throw new NotFoundException(`Usuário com ID ${userId} não encontrado.`);
+         }
+         return this.depositModel.findAll({
+             where: { userId: userId },
+             order: [['createdAt', 'DESC']],
+         });
+     }
+  
+      public async getUserWithdrawals(userId: number): Promise<Withdrawal[]> { // CORRIGIDO: Método definido como public
+          const user = await this.authService.findCurrentUser(userId);
+          if (!user) {
+              throw new NotFoundException(`Usuário com ID ${userId} não encontrado.`);
+          }
+         return this.withdrawalModel.findAll({
+             where: { userId: userId },
+             order: [['createdAt', 'DESC']],
+         });
+     }
+  
+      public async getUserDepositById(userId: number, depositId: number): Promise<Deposit> { // CORRIGIDO: Método definido como public
+          const deposit = await this.depositModel.findOne({
+              where: { id: depositId, userId: userId },
+               include: [User]
+          });
+          if (!deposit) {
+              throw new NotFoundException(`Depósito com ID ${depositId} não encontrado.`);
+          }
+          return deposit;
+      }
+  
+      public async getUserWithdrawalById(userId: number, withdrawalId: number): Promise<Withdrawal> { // CORRIGIDO: Método definido como public
+           const withdrawal = await this.withdrawalModel.findOne({
+              where: { id: withdrawalId, userId: userId },
+              include: [User]
+          });
+          if (!withdrawal) {
+              throw new NotFoundException(`Saque com ID ${withdrawalId} não encontrado.`);
+          }
+          return withdrawal;
+      }
+  
+     // --- ENDPOINT DE TESTE DE SIMULAÇÃO ---
+     public async simulateDepositCompletionTest(depositId: number, e2eId?: string): Promise<Deposit> { // CORRIGIDO: Método definido como public
+          // Buscar o depósito pelo ID para verificar se ele existe
+          const deposit = await this.depositModel.findByPk(depositId, { include: [User] }); // Incluir usuário para AuthService
+  
+          if (!deposit) {
+              throw new NotFoundException(`Depósito com ID ${depositId} não encontrado para simulação.`);
+          }
+  
+          // Se o depósito já está COMPLETED, não faz nada e retorna
+          if (deposit.status === DepositStatus.COMPLETED) {
+               this.logger.warn(`simulateDepositCompletionTest: Depósito ID ${deposit.id} já está COMPLETED. Nenhuma ação necessária.`);
+                return deposit; // Retorna o objeto existente
+          }
+  
+          // Iniciar uma transação manual para simular a lógica de checkDepositStatus
+          const transaction = await this.sequelize.transaction();
+          let updatedDeposit: Deposit;
+  
+          try {
+                // Simular a atualização do status para COMPLETED
+                updatedDeposit = await deposit.update({
+                    status: DepositStatus.COMPLETED,
+                    e2eId: e2eId || `TEST_E2EID_${uuidv4()}`, // Usa o e2eId fornecido ou gera um de teste
+                }, { transaction });
+  
+                // Simular a adição do saldo
+                await this.authService.updateUserBalance(deposit.userId, Number(deposit.amount), transaction);
+  
+                await transaction.commit();
+  
+                this.logger.log(`simulateDepositCompletionTest: Depósito ID ${deposit.id} marcado como COMPLETED e saldo do usuário ${deposit.userId} creditado em ${deposit.amount}.`);
+  
+               // Recarregar o objeto para garantir que todos os dados estão atualizados
+               await updatedDeposit.reload({ transaction: null }); // Recarrega fora da transação (já committada)
+               return updatedDeposit;
+  
+  
+          } catch (dbError) {
+                await transaction.rollback();
+                const err = dbError as Error;
+                this.logger.error(`simulateDepositCompletionTest: Erro DB ao simular conclusão de depósito ${depositId} e atualizar saldo: ${err.message}`, err.stack);
+                throw new InternalServerErrorException('Erro interno ao simular conclusão de depósito.');
+          }
+     }
+  
+  }
