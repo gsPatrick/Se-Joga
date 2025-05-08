@@ -55,6 +55,10 @@ import { DiceModule } from './Dice/dice.module';
 import { BetModule } from './Bet/bet.module';
 import { PokerModule } from './poker/poker.module';
 import { CacaNiquelModule } from './caca-niquel/caca-niquel.module';
+// --- Importar o novo módulo de Relatórios ---
+import { ReportModule } from './report/report.module'; // <-- ADICIONADO
+// --- Fim do Import do novo módulo ---
+
 
 // --- Novo Módulo de Pagamento ---
 import { PaymentModule } from './payment/payment.module';
@@ -151,6 +155,10 @@ import { PaymentModule } from './payment/payment.module';
 
     // --- ADICIONADO: Novo Módulo de Pagamento ---
     PaymentModule,
+    // --- Fim da adição ---
+
+    // --- ADICIONADO: Novo Módulo de Relatórios ---
+    ReportModule, // <-- ADICIONADO
     // --- Fim da adição ---
   ],
   // Adiciona Logger como provider (opcional, mas bom para logs)
