@@ -4,7 +4,7 @@ import { SequelizeModule } from '@nestjs/sequelize';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 
-// --- Import Models (Seus Imports Originais + Novos Modelos de Pagamento) ---
+// --- Import Models (Seus Imports Originais + Novos Modelos de Pagamento + Versionamento) ---
 import { User } from './models/user/user.model';
 import { Raffle } from './models/raffle/raffle.model';
 import { RaffleTicket } from './models/raffle/raffle-ticket.model';
@@ -44,8 +44,12 @@ import { Deposit } from './models/payment/deposit.model';
 import { Withdrawal } from './models/payment/withdrawal.model';
 // --- Fim Novos modelos ---
 
+// --- Novo modelo para Versionamento APK ---
+import { AppVersion } from './models/appVersion/app-version.model';
+// --- Fim Novo modelo ---
 
-// --- Import Modules (Seus Imports Originais + Novo Módulo de Pagamento) ---
+
+// --- Import Modules (Seus Imports Originais + Novos Módulos) ---
 import { AuthModule } from './Auth/auth.module';
 import { RaffleModule } from './Raflle/raffle.module';
 import { HashModule } from './hash/hash.module';
@@ -56,12 +60,15 @@ import { BetModule } from './Bet/bet.module';
 import { PokerModule } from './poker/poker.module';
 import { CacaNiquelModule } from './caca-niquel/caca-niquel.module';
 // --- Importar o novo módulo de Relatórios ---
-import { ReportModule } from './report/report.module'; // <-- ADICIONADO
+import { ReportModule } from './report/report.module';
 // --- Fim do Import do novo módulo ---
-
 
 // --- Novo Módulo de Pagamento ---
 import { PaymentModule } from './payment/payment.module';
+// --- Fim Novo Módulo ---
+
+// --- Novo Módulo de Versionamento APK ---
+import { VersionModule } from './version/version.module';
 // --- Fim Novo Módulo ---
 
 
@@ -91,7 +98,7 @@ import { PaymentModule } from './payment/payment.module';
         // *** FIM DA ADVERTÊNCIA EXTREMA ***
 
 
-        // Lista de modelos completa incluindo os novos modelos de Pagamento
+        // Lista de modelos completa incluindo os novos modelos de Pagamento e Versionamento
         const allModels = [
             User, Raffle, RaffleTicket, RouletteRound, RouletteBet, SlotMachineRound, SlotMachineBet,
             BingoGame, BingoCard, BingoNumber, BingoGameRound, BingoGameRoundNumber, DiceRound, DiceBet,
@@ -99,9 +106,11 @@ import { PaymentModule } from './payment/payment.module';
             UserChallengeFirstTo1000Round, RaffleNumber, Bet, BetGameRound, BetGameRoundSeed, GeneratedNumber,
             BlockchainHash, DiceRoundSeed, BingoGameSeed, Seed, PokerRound, PokerPlayer, PokerHand, PokerBet,
             PokerRoundSeed,
-            // --- ADICIONADO: Novos modelos de Pagamento ---
+            // --- Novos modelos de Pagamento ---
             Deposit,
             Withdrawal,
+            // --- Novo modelo de Versionamento APK ---
+            AppVersion,
             // --- Fim da adição ---
         ];
 
@@ -153,12 +162,16 @@ import { PaymentModule } from './payment/payment.module';
     // Módulo para tarefas agendadas (@Cron, etc.)
     ScheduleModule.forRoot(),
 
-    // --- ADICIONADO: Novo Módulo de Pagamento ---
+    // --- Novo Módulo de Pagamento ---
     PaymentModule,
     // --- Fim da adição ---
 
-    // --- ADICIONADO: Novo Módulo de Relatórios ---
-    ReportModule, // <-- ADICIONADO
+    // --- Novo Módulo de Relatórios ---
+    ReportModule,
+    // --- Fim da adição ---
+
+    // --- Novo Módulo de Versionamento APK ---
+    VersionModule, // <-- ADICIONAR AQUI
     // --- Fim da adição ---
   ],
   // Adiciona Logger como provider (opcional, mas bom para logs)
