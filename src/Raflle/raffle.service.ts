@@ -569,7 +569,7 @@ export class RaffleService {
 
 
     // CRON para garantir que sempre haja uma rifa FIXA ORIGINAL (isExtra = false) ativa por preço/tipo
-    @Cron(CronExpression.EVERY_HOUR) // Roda a cada hora
+    @Cron(CronExpression.EVERY_SECOND) // Roda a cada hora
     async ensureFixedRafflesCronJob() {
         this.logger.log('CRON: Verificando necessidade de criar rifas FIXAS ORIGINAIS (isExtra=false)...');
         for (const price of this.fixedRafflePrices) {
