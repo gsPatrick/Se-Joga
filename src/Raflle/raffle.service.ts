@@ -7,12 +7,12 @@ import { GeneratedNumber } from '../models/generated-number.model';
 import { Seed } from '../models/seed.model';
 import { RaffleNumber } from '../models/raffle/raffle-number.model';
 import { RaffleTicket } from 'src/models/raffle/raffle-ticket.model';
-import { Sequelize } from 'sequelize-typescript'; // Use Sequelize from sequelize-typescript for typings
-import { Transaction } from 'sequelize'; // Import Transaction from 'sequelize'
+import { Sequelize } from 'sequelize-typescript';
+import { Transaction } from 'sequelize';
 import { User } from '../models/user/user.model';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Op } from 'sequelize';
-import { AuthService } from 'src/Auth/auth.service'; // Importar AuthService
+import { AuthService } from 'src/Auth/auth.service';
 
 
 @Injectable()
@@ -22,14 +22,12 @@ export class RaffleService {
   public readonly teamNames = [
     'Brasil', 'Alemanha', 'Itália', 'Argentina', 'França',
     'Espanha', 'Inglaterra', 'Uruguai', 'Holanda', 'Portugal',
-    'Bélgica', 'Croácia', 'México', 'Colômbia', 'Chile',
+    'Bélgica', 'Croácia', 'México', 'Colôbia', 'Chile',
     'Paraguai', 'Estados Unidos', 'Rússia', 'Suécia', 'Dinamarca',
     'Servia', 'Japão', 'Coreia do Sul', 'Camarões', 'Nigéria'
   ];
 
-  // --- ATUALIZADO PARA 5, 10, 15, 25, 50, 100 ---
-  public readonly fixedRafflePrices = [5, 10, 15, 25, 50, 100];
-  // ---------------------------------------------
+  public readonly fixedRafflePrices = [5, 10, 15, 25, 50, 100]; // Preços fixos
 
 
   constructor(
@@ -43,70 +41,46 @@ export class RaffleService {
     @InjectModel(Seed) private seedModel: typeof Seed,
     @InjectModel(User) private userModel: typeof User,
     @InjectModel(RaffleTicket) private raffleTicketModel: typeof RaffleTicket,
-    private sequelize: Sequelize, // Usando Sequelize de sequelize-typescript
-    private authService: AuthService, // Injetar AuthService
+    private sequelize: Sequelize,
+    private authService: AuthService,
   ) { }
 
+  // Método para garantir a existência das rifas fixas originais (isExtra = false)
   async initializeFixedRaffles() {
-      // NOTA: A lógica de criação atual tenta manter até 6 rifas POR PREÇO E TIPO.
-      // A descrição do usuário ("6 rifas, cada uma de um valor... se uma rifa fixa... esgotada é criado uma rifa EXTRA")
-      // sugere um modelo 1 (fixa original) + N (extras).
-      // A implementação atual da CRON e `createNextRaffleIfNeeded` parece mais alinhada a manter um pool de
-      // *até 6* por preço/tipo no total (fixas + extras).
-      // Este método de inicialização e a CRON abaixo NÃO foram alterados para a lógica 1+N.
-      // Eles continuam tentando manter até 6 por preço/tipo ativas.
-      // A listagem abaixo APENAS lista todas as rifas ativas (fixas ou extras) dos preços definidos, agrupando por preço.
-      // A lógica de criação e o flag `isExtra` talvez precisem de refatoração no futuro para seguir
-      // estritamente o modelo 1+N se este for o comportamento desejado.
-      this.logger.log('Inicializando rifas fixas (mantendo até 6 por preço/tipo)...');
+      this.logger.log('Inicializando/Verificando rifas fixas originais (garantindo uma ativa por preço/tipo)...');
       for (const price of this.fixedRafflePrices) {
-          // Rifa Tradicional
+          // Verifica para Rifa Tradicional
           try {
-              const traditionalCount = await this.raffleModel.count({ where: { ticketPrice: price, type: 'tradicional', finished: false } });
-              const neededTraditional = Math.max(0, 6 - traditionalCount); // Mantém até 6
-              if (neededTraditional > 0) {
-                  this.logger.log(`Faltam ${neededTraditional} rifa(s) tradicional(is) de R$ ${price.toFixed(2)}. Criando...`);
-                  for (let i = 0; i < neededTraditional; i++) {
-                       // NOTA: createSystemRaffle NÃO define isExtra = false, apenas cria.
-                       // A distinção entre fixa original e extra não é feita na criação atual.
-                       // O flag isExtra precisaria ser setado aqui (para a primeira) e no createNextRaffleIfNeeded (para as extras).
-                       // Mantendo a lógica existente por enquanto, mas a auditoria/listagem não distingue "fixa" original e "extra".
-                       // A listagem abaixo apenas agrupa TODAS as rifas ATIVAS por preço e tipo.
-                      await this.createSystemRaffle(price);
-                      this.logger.log(`Rifa tradicional de R$ ${price.toFixed(2)} criada.`);
-                  }
+              const existingTraditional = await this.raffleModel.findOne({
+                   where: { ticketPrice: price, type: 'tradicional', isExtra: false, finished: false },
+              });
+              if (!existingTraditional) {
+                  this.logger.log(`Nenhuma rifa TRADICIONAL original (isExtra=false) ativa encontrada para R$ ${price.toFixed(2)}. Criando uma nova.`);
+                  await this.createSystemRaffle(price, false); // Cria a rifa original (não extra)
               } else {
-                  this.logger.log(`Já existem ${traditionalCount} rifas tradicionais ativas de R$ ${price.toFixed(2)}. Nenhuma nova foi criada.`);
+                  this.logger.log(`Já existe uma rifa TRADICIONAL original (isExtra=false) ativa para R$ ${price.toFixed(2)} (ID: ${existingTraditional.id}). Nenhuma nova criada.`);
               }
           } catch (error) {
-              this.logger.error(`Erro ao inicializar rifa tradicional de R$ ${price.toFixed(2)}: ${(error as any).message}`);
+              this.logger.error(`Erro ao inicializar rifa TRADICIONAL original de R$ ${price.toFixed(2)}: ${(error as any).message}`);
           }
-          // Rifa de Equipes
+
+          // Verifica para Rifa de Equipes
           try {
-              const teamCount = await this.raffleModel.count({ where: { ticketPrice: price, type: 'equipes', finished: false } });
-               const neededTeam = Math.max(0, 6 - teamCount); // Mantém até 6
-               if (neededTeam > 0) {
-                    this.logger.log(`Faltam ${neededTeam} rifa(s) de equipes de R$ ${price.toFixed(2)}. Criando...`);
-                   for (let i = 0; i < neededTeam; i++) {
-                        // NOTA: createTeamRaffle NÃO define isExtra = false.
-                       await this.createTeamRaffle(price);
-                       this.logger.log(`Rifa de equipes de R$ ${price.toFixed(2)} criada.`);
-                   }
-               } else {
-                   this.logger.log(`Já existem ${teamCount} rifas de equipes ativas de R$ ${price.toFixed(2)}. Nenhuma nova foi criada.`);
-               }
+              const existingTeam = await this.raffleModel.findOne({
+                  where: { ticketPrice: price, type: 'equipes', isExtra: false, finished: false },
+              });
+              if (!existingTeam) {
+                  this.logger.log(`Nenhuma rifa de EQUIPES original (isExtra=false) ativa encontrada para R$ ${price.toFixed(2)}. Criando uma nova.`);
+                  await this.createTeamRaffle(price, false); // Cria a rifa original (não extra)
+              } else {
+                   this.logger.log(`Já existe uma rifa de EQUIPES original (isExtra=false) ativa para R$ ${price.toFixed(2)} (ID: ${existingTeam.id}). Nenhuma nova criada.`);
+              }
           } catch (error) {
-              this.logger.error(`Erro ao inicializar rifa de equipes de R$ ${price.toFixed(2)}: ${(error as any).message}`);
+               this.logger.error(`Erro ao inicializar rifa de EQUIPES original de R$ ${price.toFixed(2)}: ${(error as any).message}`);
           }
       }
-      this.logger.log('Inicialização de rifas fixas concluída.');
+      this.logger.log('Verificação/Inicialização de rifas fixas originais concluída.');
   }
-
-  // --- REMOVENDO OU ADAPTANDO getActiveFixedRaffles ---
-  // A nova lógica de busca será em métodos separados por tipo.
-  // O método original pode ser removido ou refatorado. Optando por remover para clareza.
-  // async getActiveFixedRaffles(): Promise<any> { ... }
-  // ----------------------------------------------------
 
 
    // Função auxiliar para formatar resumo da rifa (pode ser expandida)
@@ -303,7 +277,7 @@ export class RaffleService {
                  numberOfWinningTeamMembersReceivingPrize: null, // N/A
                   details: `Estimativa de Prêmios (Base em R$ ${totalPotentialValue.toFixed(2)} total potencial):` +
                        ` Prêmio Principal: R$ ${potentialMainPrize.toFixed(2)} (50%). Pool Equipe: R$ ${potentialTeamPrizePool.toFixed(2)} (30%).` +
-                       ` Para CADA ganhador (principal e membros da equipe), se ele tiver indicador ativo no mês, o indicador receberia 5% DO PRÊMIO INDIVIDUAL GANHO, PAGO PELA CASA. A Casa reteria 20% menos comissões pagas + pools de prêmios não distribuídos. Valor atual arrecadado: R$ ${totalCollectedValue.toFixed(2)}.`,
+                       ` Para CADA ganhador (principal e membros da equipe), se ele tiver indicador ativo no mês, o indicador receberia 5% DO SEU PRÊMIO INDIVIDUAL GANHO, PAGO PELA CASA. A Casa reteria 20% menos comissões pagas + pools de prêmios não distribuídos. Valor atual arrecadado: R$ ${totalCollectedValue.toFixed(2)}.`,
               };
          }
 
@@ -329,11 +303,11 @@ export class RaffleService {
     }
 }
 
+  // Este método não atende diretamente a nova necessidade de separar por tipo
+  // e agrupar por preço *apenas* as ATIVAS.
+  // Manter por enquanto se for usado em outro lugar, mas a nova requisição
+  // será atendida por métodos específicos.
   async getAllFixedAndExtraRaffles(): Promise<any> {
-    // Este método não atende diretamente a nova necessidade de separar por tipo
-    // e agrupar por preço *apenas* as ATIVAS.
-    // Manter por enquanto se for usado em outro lugar, mas a nova requisição
-    // será atendida por métodos específicos.
     this.logger.log('Buscando todas as rifas fixas e extras (ativas e finalizadas)...');
     const allFixedRaffles = {
         tradicional: {},
@@ -356,7 +330,7 @@ export class RaffleService {
     return allFixedRaffles;
   }
 
-  // --- NOVOS MÉTODOS PARA BUSCAR RIFAS ATIVAS AGRUPADAS POR PREÇO E TIPO ---
+  // Métodos para buscar rifas ativas agrupadas por preço e tipo (já estavam corretos para a listagem)
 
   async getActiveTraditionalRafflesGroupedByPrice(): Promise<{ [price: number]: any[] }> {
       this.logger.log('Buscando rifas TRADICIONAIS ativas, agrupadas por preço...');
@@ -429,16 +403,20 @@ export class RaffleService {
       return groupedRaffles;
   }
 
-  // --- FIM DOS NOVOS MÉTODOS DE BUSCA ---
 
-
-  async createSystemRaffle(ticketPrice: number): Promise<Raffle> {
+  // Método interno para criar Rifa Tradicional (agora aceita isExtra)
+  public async createSystemRaffle(ticketPrice: number, isExtra: boolean): Promise<Raffle> {
     const latestHash = await this.blockchainHashModel.findOne({
       order: [['timestamp', 'DESC']],
     });
 
     if (!latestHash) {
-      throw new NotFoundException('Nenhuma hash de blockchain encontrada.');
+      // Se estiver criando uma rifa original (isExtra=false), a falta de hash é CRÍTICA.
+      // Se estiver criando uma extra, pode ser um problema temporário, mas ainda precisa de uma hash.
+      // Para simplificar, vamos sempre exigir uma hash para qualquer criação.
+       const errorMessage = `Nenhuma hash de blockchain encontrada para criar nova rifa (tipo: tradicional, preço: ${ticketPrice}, isExtra: ${isExtra}).`;
+       this.logger.error(errorMessage);
+      throw new InternalServerErrorException(errorMessage); // Lança erro interno, não NotFound aqui
     }
 
     // Busca a seed e o generatedNumber MAIS RECENTE associado à hash
@@ -457,10 +435,9 @@ export class RaffleService {
     });
 
     if (!correspondingSeed || correspondingSeed.generatedNumbers.length === 0) {
-      // Tentar gerar número se não existir? Por agora, lança erro.
-      throw new NotFoundException(
-        `Nenhuma seed ou generatedNumber NÃO USADO correspondente encontrado para a hash ${latestHash.id}. Execute a geração de números.`
-      );
+       const errorMessage = `Nenhuma seed ou generatedNumber NÃO USADO encontrado para a hash ${latestHash.id} para criar nova rifa (tipo: tradicional, preço: ${ticketPrice}, isExtra: ${isExtra}). Execute a geração de números.`;
+        this.logger.error(errorMessage);
+       throw new InternalServerErrorException(errorMessage); // Lança erro interno, não NotFound
     }
 
     const generatedNumberToUse = correspondingSeed.generatedNumbers[0];
@@ -468,30 +445,30 @@ export class RaffleService {
     const winningTicketNumber = lastTwoDigits.toString().padStart(2, '0'); // Formato '00' a '99'
 
     const startDate = new Date();
-
-    // Define endDate como 7 dias a partir de agora, por exemplo
     const endDate = new Date(startDate);
     endDate.setDate(startDate.getDate() + 7); // Adiciona 7 dias
 
-    // NOTA: Este método NÃO seta isExtra = false. Ele sempre cria uma rifa sem setar esse flag.
-    // Para implementar a lógica 1 fixa + N extras, a CRON ou initialize precisaria chamar
-    // este método com um flag isExtra: true para as extras, e este método precisaria
-    // aceitar e salvar esse flag.
+     const baseTitle = `Rifa Tradicional - Loto Jack - R$ ${ticketPrice.toFixed(2)}`;
+     const extraTitle = `Rifa Tradicional EXTRA - R$ ${ticketPrice.toFixed(2)}`;
+
+     const baseDescription = `Rifa Loto Jack gerada automaticamente. O prêmio para o bilhete sorteado é de 85% do valor total arrecadado. Se o ganhador teve indicador ativo no mês do sorteio, este recebe 5% do valor total arrecadado como bônus de indicação, pago pela Casa. A Casa retém 10% do total arrecadado (se comissão paga) ou 15% (se comissão não paga, pois reverte para a Casa). Baseado na hash ${latestHash.hash}.`;
+     const extraDescription = `Rifa EXTRA gerada automaticamente após o esgotamento da rifa fixa original de mesmo valor. Prêmio de 85% do total arrecadado + 5% bônus indicador pela Casa. Casa retém 10-15%. Baseado na hash ${latestHash.hash}.`;
+
+
     const newRaffle = await this.raffleModel.create({
-      raffleIdentifier: `RJ-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`, // ID mais único e curto
-      type: 'tradicional', // Definindo o tipo
-      title: `Rifa Tradicional - Loto Jack - R$ ${ticketPrice.toFixed(2)}`, // Nome Fantasia
-      // DESCRIÇÃO ATUALIZADA
-      description: `Rifa Loto Jack gerada automaticamente. O prêmio para o bilhete sorteado é de 85% do valor total arrecadado. Se o ganhador teve indicador ativo no mês do sorteio, este recebe 5% do valor total arrecadado como bônus de indicação, pago pela Casa. A Casa retém 10% do total arrecadado (se comissão paga) ou 15% (se comissão não paga, pois reverte para a Casa). Baseado na hash ${latestHash.hash}.`,
+      raffleIdentifier: `${isExtra ? 'RJ-EX' : 'RJ'}-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+      type: 'tradicional',
+      title: isExtra ? extraTitle : baseTitle,
+      description: isExtra ? extraDescription : baseDescription,
       ticketPrice: ticketPrice,
       totalTickets: 100, // 00 a 99
       soldTickets: 0,
       startDate: startDate,
-      endDate: endDate, // Adiciona a data de fim
+      endDate: endDate,
       finished: false,
       winningTicket: winningTicketNumber, // Armazena 00-99 internamente
-      drawDate: null, // Será preenchido na finalização
-      isExtra: false, // <-- DEFININDO isExtra DEFAULT COMO FALSE AQUI
+      drawDate: null,
+      isExtra: isExtra, // Salva o flag
     });
 
     // Associa o número gerado à rifa E MARCA COMO USADO
@@ -507,64 +484,155 @@ export class RaffleService {
 
 
     this.logger.log(
-      `Rifa Tradicional ${newRaffle.raffleIdentifier} (ID ${newRaffle.id}) criada usando GeneratedNumber ID ${generatedNumberToUse.id}. Preço: R$ ${ticketPrice.toFixed(2)}. Bilhete Sorteado (interno): ${winningTicketNumber}. Finaliza em: ${endDate.toISOString()}. isExtra: ${newRaffle.isExtra}`
+      `Rifa Tradicional (ID ${newRaffle.id}, ${isExtra ? 'EXTRA' : 'FIXA ORIGINAL'}) criada para R$ ${ticketPrice.toFixed(2)}. Bilhete Sorteado (interno): ${winningTicketNumber}. Finaliza em: ${endDate.toISOString()}`
     );
 
     return newRaffle;
   }
 
-   // NOTA: A lógica da CRON abaixo tenta manter ATÉ 6 rifas POR PREÇO E TIPO ativas no total (fixas + extras).
-   // Isso pode não corresponder exatamente à lógica descrita de 1 fixa + N extras.
-   // Para implementar a lógica 1+N, a CRON precisaria verificar se existe *pelo menos uma* rifa *não extra*
-   // daquele preço/tipo que não está finalizada. Se não existir, criar a fixa (isExtra=false).
-   // Se existir a fixa (isExtra=false) e ela estiver esgotada, criar uma extra (isExtra=true).
-   // Se existir uma extra (isExtra=true) e ela estiver esgotada, NÃO criar outra extra.
-   // Refatorar a CRON para essa lógica seria mais complexo e exige cuidado.
-   // Mantendo a CRON atual que tenta manter até 6 no total por preço/tipo.
-   // A listagem já reflete todas as ativas dos preços fixos.
-  @Cron(CronExpression.EVERY_HOUR) // Roda a cada hora
-  async createRafflesCronJob() {
-    this.logger.log('CRON: Verificando necessidade de criar rifas fixas (mantendo até 6 por preço/tipo)...');
-    for (const price of this.fixedRafflePrices) {
-        // Tradicional
-        const activeTraditionalCount = await this.raffleModel.count({
-            where: { ticketPrice: price, type: 'tradicional', finished: false },
-        });
-        if (activeTraditionalCount < 6) { // Tenta manter 6 ativas no total (fixas + extras)
-            const needed = 6 - activeTraditionalCount;
-            this.logger.log(`CRON: Necessário criar ${needed} rifa(s) tradicional(is) de R$ ${price.toFixed(2)}.`);
-            for (let i = 0; i < needed; i++) {
-                try {
-                     // NOTA: createSystemRaffle NÃO define isExtra=true para extras.
-                     // Se a lógica 1+N for necessária, isso precisa ser alterado aqui.
-                     // Ex: A primeira rifa criada se count era 0 seria isExtra=false, as próximas seriam isExtra=true.
-                    await this.createSystemRaffle(price); // Isso cria rifas com isExtra=false atualmente
-                } catch (error) {
-                    this.logger.error(`CRON: Erro ao criar rifa tradicional de R$ ${price.toFixed(2)}: ${(error as any).message}`);
+  // Método interno para criar Rifa de Equipes (agora aceita isExtra)
+  public async createTeamRaffle(ticketPrice: number, isExtra: boolean): Promise<Raffle> {
+    const latestHash = await this.blockchainHashModel.findOne({ order: [['timestamp', 'DESC']] });
+    if (!latestHash) {
+        const errorMessage = `Nenhuma hash de blockchain encontrada para criar nova rifa (tipo: equipes, preço: ${ticketPrice}, isExtra: ${isExtra}).`;
+        this.logger.error(errorMessage);
+        throw new InternalServerErrorException(errorMessage);
+    }
+
+    // Busca a seed e o generatedNumber MAIS RECENTE associado à hash
+    const correspondingSeed = await this.seedModel.findOne({
+        where: { hashId: latestHash.id },
+        include: [
+            {
+                model: GeneratedNumber,
+                // Busca o número que AINDA NÃO FOI USADO (isUsed = false)
+                 where: { isUsed: false },
+                 order: [['createdAt', 'ASC']], // Pega o mais antigo NÃO usado
+                 limit: 1,
+            },
+        ],
+        order: [['createdAt', 'DESC']],
+    });
+    if (!correspondingSeed || correspondingSeed.generatedNumbers.length === 0) {
+        const errorMessage = `Nenhuma seed/generatedNumber NÃO USADO encontrado para a hash ${latestHash.id} para criar nova rifa (tipo: equipes, preço: ${ticketPrice}, isExtra: ${isExtra}). Execute a geração de números.`;
+         this.logger.error(errorMessage);
+        throw new InternalServerErrorException(errorMessage);
+    }
+
+    const generatedNumberToUse = correspondingSeed.generatedNumbers[0];
+    const lastTwoDigits = BigInt(generatedNumberToUse.number) % 100n;
+    const winningTicketNumber = lastTwoDigits.toString().padStart(2, '0'); // 00-99
+
+    const startDate = new Date();
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + 7); // 7 dias para finalizar, por exemplo
+
+     const baseTitle = `Rifa de Equipes - Loto Seleções - R$ ${ticketPrice.toFixed(2)}`;
+     const extraTitle = `Rifa de Equipes EXTRA - R$ ${ticketPrice.toFixed(2)}`;
+
+     const baseDescription = `Rifa Loto Seleções gerada automaticamente. O prêmio é dividido: 50% do total arrecadado (pool principal) para o bilhete exato sorteado, e 30% do total arrecadado (pool da equipe) dividido igualmente entre os membros da equipe vencedora que compraram pelo menos um bilhete (excluindo o ganhador principal, se for o caso). Para CADA ganhador (principal e membros da equipe), se ele foi indicado e o indicador estiver ativo no mês do sorteio, este recebe 5% do valor DO SEU PRÊMIO INDIVIDUAL como bônus de indicação, pago PELA CASA. A Casa retém 20% do total arrecadado (base) menos comissões de 5% pagas + pools de prêmios que não foram distribuídos. Baseado na hash ${latestHash.hash}`;
+     const extraDescription = `Rifa EXTRA gerada automaticamente após o esgotamento da rifa fixa original de mesmo valor. Prêmio: 50% principal + 30% pool equipe + 5% bônus indicador pela Casa. Casa retém 20% + não distribuído. Baseado na hash ${latestHash.hash}`;
+
+
+    const newRaffle = await this.raffleModel.create({
+        raffleIdentifier: `${isExtra ? 'RL-EX' : 'RL'}-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
+        type: 'equipes',
+        title: isExtra ? extraTitle : baseTitle,
+        description: isExtra ? extraDescription : baseDescription,
+        ticketPrice: ticketPrice,
+        totalTickets: 100, // 00-99
+        soldTickets: 0,
+        startDate: startDate,
+        endDate: endDate,
+        finished: false,
+        winningTicket: winningTicketNumber, // Armazena 00-99
+        drawDate: null,
+        isExtra: isExtra, // Salva o flag
+    });
+
+     // Associa o número gerado à rifa E MARCA COMO USADO
+     await this.generatedNumberModel.update(
+         { isUsed: true },
+         { where: { id: generatedNumberToUse.id } }
+     );
+
+    await this.raffleNumberModel.create({
+        raffleId: newRaffle.id,
+        numberId: generatedNumberToUse.id,
+    });
+
+    this.logger.log(
+        `Rifa de Equipes (ID ${newRaffle.id}, ${isExtra ? 'EXTRA' : 'FIXA ORIGINAL'}) criada para R$ ${ticketPrice.toFixed(2)}. Bilhete Sorteado (interno): ${winningTicketNumber}. Finaliza em: ${endDate.toISOString()}`
+    );
+    return newRaffle;
+  }
+
+
+    // CRON para garantir que sempre haja uma rifa FIXA ORIGINAL (isExtra = false) ativa por preço/tipo
+    @Cron(CronExpression.EVERY_HOUR) // Roda a cada hora
+    async ensureFixedRafflesCronJob() {
+        this.logger.log('CRON: Verificando necessidade de criar rifas FIXAS ORIGINAIS (isExtra=false)...');
+        for (const price of this.fixedRafflePrices) {
+             // Verifica e cria para Tradicional (se necessário)
+            try {
+                const existingTraditional = await this.raffleModel.findOne({
+                    where: { ticketPrice: price, type: 'tradicional', isExtra: false, finished: false },
+                });
+                if (!existingTraditional) {
+                     this.logger.log(`CRON: Nenhuma rifa TRADICIONAL original ativa encontrada para R$ ${price.toFixed(2)}. Criando uma nova.`);
+                    await this.createSystemRaffle(price, false); // Cria a rifa original (não extra)
+                } else {
+                    this.logger.debug(`CRON: Já existe rifa TRADICIONAL original ativa para R$ ${price.toFixed(2)} (ID: ${existingTraditional.id}).`);
                 }
+            } catch (error) {
+                 this.logger.error(`CRON: Erro ao verificar/criar rifa TRADICIONAL original de R$ ${price.toFixed(2)}: ${(error as any).message}`);
             }
+
+            // Verifica e cria para Equipes (se necessário)
+             try {
+                const existingTeam = await this.raffleModel.findOne({
+                     where: { ticketPrice: price, type: 'equipes', isExtra: false, finished: false },
+                });
+                if (!existingTeam) {
+                    this.logger.log(`CRON: Nenhuma rifa de EQUIPES original ativa encontrada para R$ ${price.toFixed(2)}. Criando uma nova.`);
+                    await this.createTeamRaffle(price, false); // Cria a rifa original (não extra)
+                } else {
+                    this.logger.debug(`CRON: Já existe rifa de EQUIPES original ativa para R$ ${price.toFixed(2)} (ID: ${existingTeam.id}).`);
+                }
+            } catch (error) {
+                 this.logger.error(`CRON: Erro ao verificar/criar rifa de EQUIPES original de R$ ${price.toFixed(2)}: ${(error as any).message}`);
+            }
+        }
+        this.logger.log('CRON: Verificação/Criação de rifas FIXAS ORIGINAIS concluída.');
+    }
+
+
+    // Função auxiliar para criar a próxima rifa se necessário (apenas extras após esgotamento da fixa original)
+    private async createNextRaffleIfNeeded(type: 'tradicional' | 'equipes', price: number, wasExtra: boolean): Promise<void> {
+        // Se a rifa esgotada era uma EXTRA, NÃO crie outra automaticamente via esgotamento.
+        if (wasExtra) {
+            this.logger.log(`Rifa EXTRA (tipo: ${type}, preço: ${price}) esgotada. NÃO será criada outra EXTRA automaticamente via esgotamento.`);
+            // A CRON agora é responsável por garantir que haja sempre uma rifa principal (isExtra=false)
+            // disponível para que novas extras possam ser criadas quando ela esgotar (se for a fixa original).
+            // Ou, se a fixa original já terminou e a extra esgotou, a CRON criará a PRÓXIMA fixa original.
+            return;
         }
 
-        // Equipes
-        const activeTeamCount = await this.raffleModel.count({
-            where: { ticketPrice: price, type: 'equipes', finished: false },
-        });
-        if (activeTeamCount < 6) { // Tenta manter 6 ativas no total (fixas + extras)
-            const needed = 6 - activeTeamCount;
-             this.logger.log(`CRON: Necessário criar ${needed} rifa(s) de equipes de R$ ${price.toFixed(2)}.`);
-            for (let i = 0; i < needed; i++) {
-                try {
-                     // NOTA: createTeamRaffle NÃO define isExtra=true para extras.
-                     // Se a lógica 1+N for necessária, isso precisa ser alterado aqui.
-                    await this.createTeamRaffle(price); // Isso cria rifas com isExtra=false atualmente
-                } catch (error) {
-                    this.logger.error(`CRON: Erro ao criar rifa de equipes de R$ ${price.toFixed(2)}: ${(error as any).message}`);
-                }
-            }
-        }
+        // Se a rifa esgotada NÃO era extra (era a FIXA ORIGINAL), CRIE a próxima EXTRA.
+         this.logger.log(`Rifa FIXA ORIGINAL (tipo: ${type}, preço: ${price}) esgotada. Criando rifa EXTRA...`);
+         try {
+             if (type === 'tradicional') {
+                  await this.createSystemRaffle(price, true); // Cria uma rifa EXTRA
+             } else {
+                  await this.createTeamRaffle(price, true); // Cria uma rifa EXTRA
+             }
+             this.logger.log(`Nova rifa EXTRA (tipo: ${type}, preço: ${price}) criada com sucesso após esgotamento da fixa original.`);
+
+         } catch (err) {
+             this.logger.error(`Falha CRÍTICA ao criar rifa EXTRA após esgotamento da fixa original (tipo: ${type}, preço: ${price}): ${(err as Error).message}`);
+         }
     }
-    this.logger.log('CRON: Verificação para criar rifas concluída.');
-  }
+
 
   async buyRaffleTickets(
     userId: number,
@@ -716,11 +784,8 @@ export class RaffleService {
 
       // Check if the raffle sold out with this purchase
       if (newSoldCount >= raffle.totalTickets) {
-          this.logger.log(`Rifa ${raffleId} (tipo: ${raffle.type}, isExtra: ${raffle.isExtra}) esgotou com esta compra. Verificando necessidade de criar nova...`);
+          this.logger.log(`Rifa ${raffleId} (tipo: ${raffle.type}, isExtra: ${raffle.isExtra}) esgotou com esta compra. Verificando necessidade de criar próxima...`);
           // Trigger async creation of the next raffle if needed (don't await, don't block the purchase)
-           // NOTA: Este `createNextRaffleIfNeeded` DEVE ser refatorado para considerar `isExtra`.
-           // Atualmente, ele chama `createSystemRaffle` ou `createTeamRaffle` que criam `isExtra: false`
-           // e a CRON tenta manter 6 ativas no total. A lógica de 1 fixa + N extras exige mudança aqui e na CRON.
           this.createNextRaffleIfNeeded(raffle.type, Number(raffle.ticketPrice), raffle.isExtra).catch(err => {
               // Log error but don't fail the current purchase because of this background task
               this.logger.error(`Erro (não bloqueante) ao tentar criar próxima rifa após esgotamento da ${raffleId}: ${err.message}`);
@@ -783,87 +848,7 @@ export class RaffleService {
     }
   }
 
-    // Função auxiliar para criar a próxima rifa se necessário
-    // NOTA: Este método CONTROLA a criação de rifas extras após esgotamento.
-    // Ele precisa ser refatorado para implementar a lógica:
-    // - Se a rifa esgotada era isExtra: false (a fixa original), CRIE uma nova com isExtra: true.
-    // - Se a rifa esgotada era isExtra: true (uma extra), NÃO CRIE outra automaticamente via esgotamento.
-    // - A CRON é que deve garantir que SEMPRE HÁ PELO MENOS UMA rifa isExtra: false (a fixa original)
-    //   para cada preço/tipo (seja ela nova, parcialmente vendida ou esgotada aguardando finalização).
-    // O código atual NÃO implementa essa distinção na criação.
-    private async createNextRaffleIfNeeded(type: 'tradicional' | 'equipes', price: number, wasExtra: boolean): Promise<void> {
-        // Se a rifa esgotada era uma extra, NÃO crie outra automaticamente via esgotamento.
-        if (wasExtra) {
-            this.logger.log(`Rifa extra (tipo: ${type}, preço: ${price}) esgotada. NÃO será criada outra extra automaticamente via esgotamento.`);
-            // A CRON agora é responsável por garantir que haja sempre uma rifa principal (isExtra=false)
-            // disponível para que novas extras possam ser criadas quando ela esgotar.
-            return;
-        }
-
-        // Se a rifa esgotada NÃO era extra (era a fixa original), CRIE a próxima extra.
-         this.logger.log(`Rifa fixa original (tipo: ${type}, preço: ${price}) esgotada. Criando rifa EXTRA...`);
-         try {
-             let newRaffle: Raffle;
-             const latestHash = await this.blockchainHashModel.findOne({ order: [['timestamp', 'DESC']] });
-             if (!latestHash) throw new Error('Nenhuma hash de blockchain encontrada para criar nova rifa.');
-
-             const correspondingSeed = await this.seedModel.findOne({
-                 where: { hashId: latestHash.id },
-                 include: [{ model: GeneratedNumber, where: { isUsed: false }, order: [['createdAt', 'ASC']], limit: 1 }],
-                 order: [['createdAt', 'DESC']],
-             });
-              if (!correspondingSeed || correspondingSeed.generatedNumbers.length === 0) {
-                 throw new Error(`Nenhuma seed/generatedNumber NÃO USADO encontrado para a hash ${latestHash.id} para criar nova rifa.`);
-              }
-             const generatedNumberToUse = correspondingSeed.generatedNumbers[0];
-             const lastTwoDigits = BigInt(generatedNumberToUse.number) % 100n; // 0 a 99
-             const winningTicketNumber = lastTwoDigits.toString().padStart(2, '0'); // Formato '00' a '99'
-
-              const startDate = new Date();
-              const endDate = new Date(startDate);
-              endDate.setDate(startDate.getDate() + 7); // 7 dias para finalizar
-
-             const baseRaffleData = {
-                 raffleIdentifier: `${type === 'tradicional' ? 'RJ-EX' : 'RL-EX'}-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`, // ID para extra
-                 type: type,
-                  title: `${type === 'tradicional' ? 'Rifa Tradicional EXTRA' : 'Rifa de Equipes EXTRA'} - R$ ${price.toFixed(2)}`, // Título para extra
-                  description: `${type === 'tradicional' ? 'Rifa EXTRA' : 'Rifa de Equipes EXTRA'} gerada automaticamente após o esgotamento da rifa fixa original de mesmo valor. ${type === 'tradicional' ? 'Prêmio de 85% do total arrecadado + 5% bônus indicador pela Casa. Casa retém 10-15%.' : 'Prêmio: 50% principal + 30% pool equipe + 5% bônus indicador pela Casa. Casa retém 20% + não distribuído.'} Baseado na hash ${latestHash.hash}.`,
-                  ticketPrice: price,
-                  totalTickets: 100,
-                  soldTickets: 0,
-                  startDate: startDate,
-                  endDate: endDate,
-                  finished: false,
-                  winningTicket: winningTicketNumber,
-                  drawDate: null,
-                  isExtra: true, // <<< MARCADA COMO EXTRA AQUI
-             };
-
-             newRaffle = await this.raffleModel.create(baseRaffleData);
-
-              // Associa o número gerado à rifa E MARCA COMO USADO
-              await this.generatedNumberModel.update(
-                  { isUsed: true },
-                  { where: { id: generatedNumberToUse.id } }
-              );
-
-             await this.raffleNumberModel.create({
-               raffleId: newRaffle.id,
-               numberId: generatedNumberToUse.id,
-             });
-
-             this.logger.log(
-                `Rifa EXTRA (tipo: ${type}, preço: ${price}, ID: ${newRaffle.id}) criada após esgotamento da fixa original. Bilhete Sorteado (interno): ${winningTicketNumber}. Finaliza em: ${endDate.toISOString()}`
-             );
-
-
-         } catch (err) {
-             this.logger.error(`Falha CRÍTICA ao criar rifa EXTRA após esgotamento da fixa original (tipo: ${type}, preço: ${price}): ${(err as Error).message}`);
-         }
-    }
-
-
-  private generateUniqueAvailableTicketNumbers(totalTickets: number, existingNumbers: Set<string>, quantity: number): string[] {
+    private generateUniqueAvailableTicketNumbers(totalTickets: number, existingNumbers: Set<string>, quantity: number): string[] {
     const availableNumbers: string[] = [];
     for (let i = 0; i < totalTickets; i++) {
         const numStr = i.toString().padStart(2, '0');
@@ -899,7 +884,7 @@ export class RaffleService {
     const raffles = await this.raffleModel.findAll({
       include: [
         // Incluir os tickets com user E referrer para o calculatePrizeDetails (para rifas de equipes)
-        { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'email', 'referrerId'] }] },
+        { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'email', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] }, // Incluído referrer aqui também
         // Incluir o winnerUser COM referrer para o calculatePrizeDetails (para rifas tradicionais e equipe)
         { model: User, as: 'winnerUser', attributes: ['id', 'name', 'email', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
         { model: RaffleNumber, include: [ { model: GeneratedNumber, include: [ { model: Seed, include: [BlockchainHash] } ] } ] },
@@ -1152,7 +1137,8 @@ export class RaffleService {
            if (!transactionHost) await transaction.rollback();
           throw new InternalServerErrorException(`Rifa tradicional ${raffleId} não possui um bilhete sorteado definido.`);
       }
-      this.logger.log(`Finalizando Rifa Tradicional ${raffleId}. Bilhete Sorteado (interno): ${winningTicketNumberInternal}`);
+      this.logger.log(`Finalizando Rifa Tradicional ${raffleId}. Bilhete Sorteado (interno): ${winningTicketNumberInternal}. isExtra: ${raffle.isExtra}`);
+
 
       // Find the winning ticket from the already included tickets
       const winningTicket = raffle.tickets?.find(t => t.ticketNumber === winningTicketNumberInternal);
@@ -1280,9 +1266,10 @@ export class RaffleService {
   }
 
 
-
-
-
+    // CRON para verificar rifas a finalizar (continua a cada 5 minutos)
+    // Essa CRON não precisa ser alterada, pois ela apenas busca rifas *prontas* para finalizar,
+    // e os métodos `finalizeRaffle`/`finalizeTeamRaffle` são quem lidam com a lógica de distribuição
+    // e a criação da próxima rifa (se aplicável, via createNextRaffleIfNeeded).
   @Cron('*/5 * * * *') // Roda a cada 5 minutos para verificar rifas a finalizar
   async finalizeRafflesCronJob() {
       const now = new Date();
@@ -1299,8 +1286,6 @@ export class RaffleService {
               ]
           },
            // Não usar lock aqui na busca inicial, pois a finalização individual terá sua própria transação e lock
-           // lock: true, // Tenta bloquear as linhas encontradas
-           // skipLocked: true // Pula as que já estão bloqueadas por outra instância/processo
            // Ordering might help process oldest first or newest first
            order: [['endDate', 'ASC'], ['createdAt', 'ASC']] // Prioriza as que venceram primeiro, depois as mais antigas
       });
@@ -1549,73 +1534,11 @@ async getUserRaffleData(userId: number): Promise<any> {
    });
 }
 
-async createTeamRaffle(ticketPrice: number): Promise<Raffle> {
-    const latestHash = await this.blockchainHashModel.findOne({ order: [['timestamp', 'DESC']] });
-    if (!latestHash) throw new NotFoundException('Nenhuma hash de blockchain encontrada.');
 
-    // Busca a seed e o generatedNumber MAIS RECENTE associado à hash
-    const correspondingSeed = await this.seedModel.findOne({
-        where: { hashId: latestHash.id },
-        include: [
-            {
-                model: GeneratedNumber,
-                // Busca o número que AINDA NÃO FOI USADO (isUsed = false)
-                 where: { isUsed: false },
-                 order: [['createdAt', 'ASC']], // Pega o mais antigo NÃO usado
-                 limit: 1,
-            },
-        ],
-        order: [['createdAt', 'DESC']],
-    });
-    if (!correspondingSeed || correspondingSeed.generatedNumbers.length === 0) {
-        throw new NotFoundException(`Nenhuma seed/generatedNumber NÃO USADO encontrado para a hash ${latestHash.id}. Execute a geração de números.`);
-    }
+  // Método interno para criar Rifa de Equipes (agora aceita isExtra)
+   // Já implementado acima, mas repetindo a assinatura por clareza:
+   // private async createTeamRaffle(ticketPrice: number, isExtra: boolean): Promise<Raffle> { ... }
 
-    const generatedNumberToUse = correspondingSeed.generatedNumbers[0];
-    const lastTwoDigits = BigInt(generatedNumberToUse.number) % 100n;
-    const winningTicketNumber = lastTwoDigits.toString().padStart(2, '0'); // 00-99
-
-    const startDate = new Date();
-    const endDate = new Date(startDate);
-    endDate.setDate(startDate.getDate() + 7); // 7 dias para finalizar, por exemplo
-
-     // NOTA: Este método NÃO seta isExtra = false. Ele sempre cria uma rifa sem setar esse flag.
-    // Para implementar a lógica 1 fixa + N extras, a CRON ou initialize precisaria chamar
-    // este método com um flag isExtra: true para as extras, e este método precisaria
-    // aceitar e salvar esse flag.
-    const newRaffle = await this.raffleModel.create({
-        raffleIdentifier: `RL-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`, // ID mais único e curto (RL = Rifa Loto Seleções)
-        type: 'equipes', // Define o tipo
-        title: `Rifa de Equipes - Loto Seleções - R$ ${ticketPrice.toFixed(2)}`, // Nome Fantasia
-         // DESCRIÇÃO ATUALIZADA
-        description: `Rifa Loto Seleções gerada automaticamente. O prêmio é dividido: 50% do total arrecadado (pool principal) para o bilhete exato sorteado, e 30% do total arrecadado (pool da equipe) dividido igualmente entre os membros da equipe vencedora que compraram pelo menos um bilhete (excluindo o ganhador principal, se for o caso). Para CADA ganhador (principal e membros da equipe), se ele foi indicado e o indicador estiver ativo no mês do sorteio, este recebe 5% do valor DO SEU PRÊMIO INDIVIDUAL como bônus de indicação, pago PELA CASA. A Casa retém 20% do total arrecadado (base) menos comissões de 5% pagas + pools de prêmios que não foram distribuídos. Baseado na hash ${latestHash.hash}`,
-        ticketPrice: ticketPrice,
-        totalTickets: 100, // 00-99
-        soldTickets: 0,
-        startDate: startDate,
-        endDate: endDate, // Data de fim
-        finished: false,
-        winningTicket: winningTicketNumber, // Armazena 00-99
-        drawDate: null,
-         isExtra: false, // <-- DEFININDO isExtra DEFAULT COMO FALSE AQUI
-    });
-
-     // Associa o número gerado à rifa E MARCA COMO USADO
-     await this.generatedNumberModel.update(
-         { isUsed: true },
-         { where: { id: generatedNumberToUse.id } }
-     );
-
-    await this.raffleNumberModel.create({
-        raffleId: newRaffle.id,
-        numberId: generatedNumberToUse.id,
-    });
-
-    this.logger.log(
-        `Rifa de Equipes ${newRaffle.raffleIdentifier} (ID ${newRaffle.id}) criada usando GeneratedNumber ID ${generatedNumberToUse.id}. Preço: R$ ${ticketPrice.toFixed(2)}. Bilhete Sorteado (interno): ${winningTicketNumber}. Finaliza em: ${endDate.toISOString()}. isExtra: ${newRaffle.isExtra}`
-    );
-    return newRaffle;
-  }
 
   private getTeamNameByTicketNumber(raffle: Raffle, ticketNumber: string): string {
     if (!ticketNumber || raffle.type !== 'equipes') return 'N/A'; // Ajuste para retornar N/A
@@ -1647,21 +1570,24 @@ async createTeamRaffle(ticketPrice: number): Promise<Raffle> {
       const teamTicketsInternal: string[] = []; // Armazena 00-99 internamente
       const membersMap = new Map<number, { id: number; name: string; tickets: string[] }>(); // Mapa de membros por ID
 
-      for (let j = 0; j < ticketsPerTeam; j++) {
+      for (let j = 0; j < ticketsPerTeam; j++) { // Corrigido loop de j
         const ticketNumberInternal = (i * ticketsPerTeam + j).toString().padStart(2, '0'); // 00-99
-        teamTicketsInternal.push(ticketNumberInternal);
+        // Verificar se o ticketNumberInternal está dentro do range totalTickets
+        if (i * ticketsPerTeam + j < totalTickets) {
+            teamTicketsInternal.push(ticketNumberInternal);
 
-        const purchasedTicket = ticketsMap.get(ticketNumberInternal);
-        if (purchasedTicket && purchasedTicket.user) {
-          const userId = purchasedTicket.user.id;
-          if (!membersMap.has(userId)) {
-            membersMap.set(userId, {
-              id: userId,
-              name: purchasedTicket.user.name,
-              tickets: [], // Armazenará números internos 00-99
-            });
-          }
-          membersMap.get(userId)?.tickets.push(ticketNumberInternal);
+            const purchasedTicket = ticketsMap.get(ticketNumberInternal);
+            if (purchasedTicket && purchasedTicket.user) {
+              const userId = purchasedTicket.user.id;
+              if (!membersMap.has(userId)) {
+                membersMap.set(userId, {
+                  id: userId,
+                  name: purchasedTicket.user.name,
+                  tickets: [], // Armazenará números internos 00-99
+                });
+              }
+              membersMap.get(userId)?.tickets.push(ticketNumberInternal);
+            }
         }
       }
 
@@ -1679,12 +1605,10 @@ async createTeamRaffle(ticketPrice: number): Promise<Raffle> {
     return this.teamNames;
   }
 
-    @Cron(CronExpression.EVERY_HOUR) // Roda junto com a criação de rifas tradicionais
-    async createTeamRafflesCronJob() {
-        // Esta lógica foi integrada em `createRafflesCronJob`
-         // Este método pode ser removido ou mantido vazio se `createRafflesCronJob` já cobre
-        // this.logger.log('CRON: createTeamRafflesCronJob chamado (lógica agora em createRafflesCronJob)');
-    }
+    // Este CRON não é mais necessário separadamente, a lógica foi movida para ensureFixedRafflesCronJob
+    // @Cron(CronExpression.EVERY_HOUR)
+    // async createTeamRafflesCronJob() { ... }
+
 
     async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promise<Raffle> {
       const transaction = transactionHost || await this.sequelize.transaction();

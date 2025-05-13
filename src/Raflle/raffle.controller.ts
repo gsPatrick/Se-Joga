@@ -25,30 +25,36 @@ export class RaffleController {
 
   constructor(private readonly raffleService: RaffleService) {}
 
-  // --- Endpoints de Criação ---
-  @Post('system/traditional') // Endpoint mais específico
+  // --- Endpoints de Criação (Manuais) ---
+
+  // Endpoint manual para criar uma rifa Tradicional (fixa original por padrão)
+  @Post('system/traditional')
   async createSystemTraditionalRaffle(@Body('ticketPrice', ParseIntPipe) ticketPrice: number): Promise<any> {
-      this.logger.log(`Criando rifa TRADICIONAL do sistema com preço: R$ ${ticketPrice.toFixed(2)}...`);
-      const raffle = await this.raffleService.createSystemRaffle(ticketPrice);
-      // Retorna formatado usando o método formatRaffleDetails que inclui isExtra
-      return this.raffleService.formatRaffleDetails(raffle);
+      this.logger.log(`Criando rifa TRADICIONAL (FIXA ORIGINAL) do sistema com preço: R$ ${ticketPrice.toFixed(2)}...`);
+      // Passa 'false' para indicar que NÃO é uma rifa extra criada manualmente
+      const raffle = await this.raffleService.createSystemRaffle(ticketPrice, false);
+      return this.raffleService.formatRaffleDetails(raffle); // Retorna formatado
   }
 
-  @Post('system/team') // Endpoint mais específico
+  // Endpoint manual para criar uma rifa de Equipes (fixa original por padrão)
+  @Post('system/team')
   async createSystemTeamRaffle(@Body('ticketPrice', ParseIntPipe) ticketPrice: number): Promise<any> {
-      this.logger.log(`Criando rifa de EQUIPES do sistema com preço: R$ ${ticketPrice.toFixed(2)}...`);
-      const raffle = await this.raffleService.createTeamRaffle(ticketPrice);
-       // Retorna formatado usando o método formatRaffleDetails que inclui isExtra
-      return this.raffleService.formatRaffleDetails(raffle);
+      this.logger.log(`Criando rifa de EQUIPES (FIXA ORIGINAL) do sistema com preço: R$ ${ticketPrice.toFixed(2)}...`);
+       // Passa 'false' para indicar que NÃO é uma rifa extra criada manualmente
+      const raffle = await this.raffleService.createTeamRaffle(ticketPrice, false);
+      return this.raffleService.formatRaffleDetails(raffle); // Retorna formatado
   }
 
-   // Endpoint manual para inicializar rifas (se necessário)
+   // Endpoint manual para inicializar rifas (se necessário) - Garante FIXAS ORIGINAIS
    @Post('initialize-fixed')
+   @HttpCode(HttpStatus.OK) // Retorna 200 OK por padrão
    async initializeFixedRafflesEndpoint() {
        this.logger.log('Endpoint para inicializar rifas fixas chamado manualmente...');
+       // Este método no Service garante que uma rifa 'isExtra: false' exista para cada preço/tipo
        await this.raffleService.initializeFixedRaffles();
-       return { message: 'Rifas fixas inicializadas/verificadas com sucesso.' };
+       return { message: 'Verificação e criação (se necessário) das rifas fixas originais concluída.' };
    }
+
 
   // --- Endpoints de Compra ---
   @UseGuards(AuthGuard('jwt'))
@@ -93,30 +99,25 @@ export class RaffleController {
       return await this.raffleService.buyRaffleTickets(userId, raffleId, { type, quantityOrNumbers: quantity });
   }
 
-  // --- Endpoints de Consulta ATUALIZADOS ---
+  // --- Endpoints de Consulta Atualizados conforme a necessidade ---
 
-  // REMOVIDO ou ADAPTADO: Removendo o endpoint geral antigo
-  // @Get('active-fixed')
-  // async getActiveFixedRaffles(): Promise<any> { ... }
-
-
-  @Get('active/traditional') // NOVO ENDPOINT para rifas TRADICIONAIS ativas
+  @Get('active/traditional') // NOVO ENDPOINT para rifas TRADICIONAIS ativas (fixas e extras)
   async getActiveTraditionalRaffles(): Promise<any> {
-       this.logger.log('Buscando rifas TRADICIONAIS ativas (preços fixos), agrupadas...');
-       // O serviço já retorna no formato agrupado por preço
+       this.logger.log('Buscando rifas TRADICIONAIS ativas (fixas e extras), agrupadas por preço...');
+       // O serviço já retorna no formato agrupado por preço, incluindo rifas extras ativas
        return await this.raffleService.getActiveTraditionalRafflesGroupedByPrice();
   }
 
-   @Get('active/team') // NOVO ENDPOINT para rifas DE EQUIPES ativas
+   @Get('active/team') // NOVO ENDPOINT para rifas DE EQUIPES ativas (fixas e extras)
    async getActiveTeamRaffles(): Promise<any> {
-        this.logger.log('Buscando rifas DE EQUIPES ativas (preços fixos), agrupadas...');
-        // O serviço já retorna no formato agrupado por preço
+        this.logger.log('Buscando rifas DE EQUIPES ativas (fixas e extras), agrupadas por preço...');
+        // O serviço já retorna no formato agrupado por preço, incluindo rifas extras ativas
         return await this.raffleService.getActiveTeamRafflesGroupedByPrice();
    }
 
 
-  @Get('filtered') // Busca rifas com filtros
-  async getFilteredRaffles( // Removido 'ByType' do nome para clareza
+  @Get('filtered') // Busca rifas com filtros (agora incluindo isExtra)
+  async getFilteredRaffles(
     @Query('type') type?: 'tradicional' | 'equipes',
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
@@ -130,16 +131,16 @@ export class RaffleController {
       return await this.raffleService.getRafflesWithDetails({ type, startDate, endDate, finished: finishedBool, isExtra: isExtraBool });
   }
 
-  @Get(':raffleId') // Busca detalhes de uma rifa específica
+  @Get(':raffleId') // Busca detalhes de uma rifa específica (agora inclui isExtra nos detalhes)
   async getRaffleByIdWithDetails(
     @Param('raffleId', ParseIntPipe) raffleId: number,
   ): Promise<any> {
     this.logger.log(`Buscando detalhes da rifa com ID: ${raffleId}...`);
-     // O serviço já formata a resposta
+     // O serviço já formata a resposta (incluindo isExtra)
     return await this.raffleService.getRaffleByIdWithDetails(raffleId);
   }
 
-  // NOVO ENDPOINT para buscar tickets de uma rifa
+  // Endpoint para buscar tickets de uma rifa
   @Get(':raffleId/tickets')
   async getRaffleTickets(@Param('raffleId', ParseIntPipe) raffleId: number): Promise<any[]> {
       this.logger.log(`Buscando tickets da rifa ${raffleId}...`);
@@ -170,7 +171,7 @@ export class RaffleController {
   async finalizeTraditionalRaffle(@Param('raffleId', ParseIntPipe) raffleId: number): Promise<any> {
       this.logger.log(`Finalizando rifa TRADICIONAL ${raffleId} (endpoint manual)...`);
       const raffle = await this.raffleService.finalizeRaffle(raffleId);
-      return this.raffleService.formatRaffleDetails(raffle); // Retorna formatado
+      return this.raffleService.formatRaffleDetails(raffle); // Retorna formatado (inclui isExtra)
   }
 
   @Post(':raffleId/finalize-team') // Endpoint específico
@@ -178,7 +179,7 @@ export class RaffleController {
   async finalizeTeamRaffle(@Param('raffleId', ParseIntPipe) raffleId: number): Promise<any> {
       this.logger.log(`Finalizando rifa de EQUIPES ${raffleId} (endpoint manual)...`);
       const raffle = await this.raffleService.finalizeTeamRaffle(raffleId);
-       return this.raffleService.formatRaffleDetails(raffle); // Retorna formatado
+       return this.raffleService.formatRaffleDetails(raffle); // Retorna formatado (inclui isExtra)
   }
 
   // --- Endpoints do Usuário Autenticado ('/my/...') ---
@@ -188,7 +189,7 @@ export class RaffleController {
   async getRafflesPlayedByUser(@Request() req): Promise<any[]> {
     const userId = req.user.id;
     this.logger.log(`Buscando rifas jogadas pelo usuário ${userId}...`);
-    // O serviço já formata a resposta
+    // O serviço já formata a resposta (incluindo isExtra)
     return await this.raffleService.getRafflesPlayedByUser(userId);
   }
 
@@ -197,7 +198,7 @@ export class RaffleController {
   async getWonRafflesByUser(@Request() req): Promise<any[]> {
     const userId = req.user.id;
     this.logger.log(`Buscando rifas GANHAS pelo usuário ${userId}...`);
-     // O serviço já formata a resposta
+     // O serviço já formata a resposta (incluindo isExtra)
     return await this.raffleService.getWonRafflesByUser(userId);
   }
 
@@ -206,7 +207,7 @@ export class RaffleController {
   async getLostRafflesByUser(@Request() req): Promise<any[]> {
     const userId = req.user.id;
     this.logger.log(`Buscando rifas PERDIDAS pelo usuário ${userId}...`);
-     // O serviço já formata a resposta
+     // O serviço já formata a resposta (incluindo isExtra)
     return await this.raffleService.getLostRafflesByUser(userId);
   }
 
@@ -215,7 +216,7 @@ export class RaffleController {
   async getUserRaffleData(@Request() req) {
     const userId = req.user.id;
     this.logger.log(`Buscando dados de rifas do usuário ${userId}...`);
-     // O serviço já formata a resposta
+     // O serviço já formata a resposta (incluindo isExtra)
     return await this.raffleService.getUserRaffleData(userId);
   }
 
