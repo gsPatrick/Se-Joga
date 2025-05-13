@@ -90,11 +90,11 @@ import { VersionModule } from './version/version.module';
         // ISTO É APENAS PARA FACILITAR TESTES INICIAIS EM AMBIENTES DEV ISOLADOS.
         // NUNCA USE CREDENCIAIS DIRETAMENTE NO CÓDIGO EM PRODUÇÃO!
         // USE configService.get<string>('DB_HOST') etc. em produção.
-        const dbHost = 'jackbear_sejoga'; // Use configService.get('DB_HOST') em produção!
+        const dbHost = 'sejogadev'; // Use configService.get('DB_HOST') em produção!
         const dbPort = 5432;             // Use configService.get('DB_PORT') em produção!
-        const dbUser = 'seJoga';         // Use configService.get('DB_USER') em produção!
-        const dbPassword = 'seJoga';     // Use configService.get('DB_PASSWORD') em produção!
-        const dbName = 'seJoga';         // Use configService.get('DB_NAME') em produção!
+        const dbUser = 'sejogadev';         // Use configService.get('DB_USER') em produção!
+        const dbPassword = 'sejogadev';     // Use configService.get('DB_PASSWORD') em produção!
+        const dbName = 'sejogadev';         // Use configService.get('DB_NAME') em produção!
         // *** FIM DA ADVERTÊNCIA EXTREMA ***
 
 

@@ -30,14 +30,16 @@ export class RaffleController {
   async createSystemTraditionalRaffle(@Body('ticketPrice', ParseIntPipe) ticketPrice: number): Promise<any> {
       this.logger.log(`Criando rifa TRADICIONAL do sistema com preço: R$ ${ticketPrice.toFixed(2)}...`);
       const raffle = await this.raffleService.createSystemRaffle(ticketPrice);
-      return this.raffleService.formatRaffleDetails(raffle); // Retorna formatado
+      // Retorna formatado usando o método formatRaffleDetails que inclui isExtra
+      return this.raffleService.formatRaffleDetails(raffle);
   }
 
   @Post('system/team') // Endpoint mais específico
   async createSystemTeamRaffle(@Body('ticketPrice', ParseIntPipe) ticketPrice: number): Promise<any> {
       this.logger.log(`Criando rifa de EQUIPES do sistema com preço: R$ ${ticketPrice.toFixed(2)}...`);
       const raffle = await this.raffleService.createTeamRaffle(ticketPrice);
-      return this.raffleService.formatRaffleDetails(raffle); // Retorna formatado
+       // Retorna formatado usando o método formatRaffleDetails que inclui isExtra
+      return this.raffleService.formatRaffleDetails(raffle);
   }
 
    // Endpoint manual para inicializar rifas (se necessário)
@@ -91,14 +93,27 @@ export class RaffleController {
       return await this.raffleService.buyRaffleTickets(userId, raffleId, { type, quantityOrNumbers: quantity });
   }
 
-  // --- Endpoints de Consulta ---
+  // --- Endpoints de Consulta ATUALIZADOS ---
 
-  @Get('active-fixed') // Busca rifas ativas dos preços fixos
-  async getActiveFixedRaffles(): Promise<any> {
-    this.logger.log('Buscando rifas fixas ativas...');
-    // O serviço já formata a resposta
-    return await this.raffleService.getActiveFixedRaffles();
+  // REMOVIDO ou ADAPTADO: Removendo o endpoint geral antigo
+  // @Get('active-fixed')
+  // async getActiveFixedRaffles(): Promise<any> { ... }
+
+
+  @Get('active/traditional') // NOVO ENDPOINT para rifas TRADICIONAIS ativas
+  async getActiveTraditionalRaffles(): Promise<any> {
+       this.logger.log('Buscando rifas TRADICIONAIS ativas (preços fixos), agrupadas...');
+       // O serviço já retorna no formato agrupado por preço
+       return await this.raffleService.getActiveTraditionalRafflesGroupedByPrice();
   }
+
+   @Get('active/team') // NOVO ENDPOINT para rifas DE EQUIPES ativas
+   async getActiveTeamRaffles(): Promise<any> {
+        this.logger.log('Buscando rifas DE EQUIPES ativas (preços fixos), agrupadas...');
+        // O serviço já retorna no formato agrupado por preço
+        return await this.raffleService.getActiveTeamRafflesGroupedByPrice();
+   }
+
 
   @Get('filtered') // Busca rifas com filtros
   async getFilteredRaffles( // Removido 'ByType' do nome para clareza
@@ -106,11 +121,13 @@ export class RaffleController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('finished') finished?: string, // Receber como string
+    @Query('isExtra') isExtra?: string, // Receber como string
   ): Promise<any[]> {
       const finishedBool = finished === 'true' ? true : (finished === 'false' ? false : undefined);
-      this.logger.log(`Buscando rifas filtradas. Filtros: type=${type}, startDate=${startDate}, endDate=${endDate}, finished=${finishedBool}`);
-      // O serviço já formata a resposta
-      return await this.raffleService.getRafflesWithDetails({ type, startDate, endDate, finished: finishedBool });
+      const isExtraBool = isExtra === 'true' ? true : (isExtra === 'false' ? false : undefined); // Converter isExtra
+      this.logger.log(`Buscando rifas filtradas. Filtros: type=${type}, startDate=${startDate}, endDate=${endDate}, finished=${finishedBool}, isExtra=${isExtraBool}`);
+      // Passa o novo filtro isExtra para o service
+      return await this.raffleService.getRafflesWithDetails({ type, startDate, endDate, finished: finishedBool, isExtra: isExtraBool });
   }
 
   @Get(':raffleId') // Busca detalhes de uma rifa específica

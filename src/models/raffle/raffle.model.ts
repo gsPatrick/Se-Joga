@@ -106,7 +106,15 @@ export class Raffle extends Model {
   })
   winningTicket!: string;
 
-  
+  // --- NOVA COLUNA AQUI ---
+   @Column({
+      type: DataType.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+   })
+   isExtra!: boolean; // Indica se esta rifa é uma "extra" criada após a finalização de uma fixa.
+  // ------------------------
+
 
   // Adicione a propriedade winnerUserId aqui:
   @ForeignKey(() => User)
