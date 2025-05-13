@@ -543,7 +543,7 @@ export class RaffleService {
         totalTickets: 100, // 00-99
         soldTickets: 0,
         startDate: startDate,
-        endDate: endDate,
+        endDate: endDate, // Data de fim
         finished: false,
         winningTicket: winningTicketNumber, // Armazena 00-99
         drawDate: null,
@@ -883,7 +883,7 @@ export class RaffleService {
 
     const raffles = await this.raffleModel.findAll({
       include: [
-        // Incluir os tickets com user E referrer para o calculatePrizeDetails (para rifas de equipes)
+         // Incluir os tickets com user E referrer para o calculatePrizeDetails (para rifas de equipes)
         { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'email', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] }, // Incluído referrer aqui também
         // Incluir o winnerUser COM referrer para o calculatePrizeDetails (para rifas tradicionais e equipe)
         { model: User, as: 'winnerUser', attributes: ['id', 'name', 'email', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
@@ -1092,16 +1092,14 @@ export class RaffleService {
   }
 
   async finalizeRaffle(raffleId: number, transactionHost?: Transaction): Promise<Raffle> {
-    const transaction = transactionHost || await this.sequelize.transaction(); // Usa transação existente ou cria uma nova
+    const transaction = transactionHost || await this.sequelize.transaction();
     let raffle; // Declare raffle outside try to ensure access in catch
 
     try {
-      // Step 1: Find and lock the Raffle row
-      // Include winning ticket user with referrer info for prize distribution logic AND for reload/return value
+      // Step 1: Find and lock the Raffle row ONLY. REMOVE INCLUDE FROM THIS STEP.
        raffle = await this.raffleModel.findByPk(raffleId, {
          transaction,
-         lock: transaction.LOCK.UPDATE,
-         include: [{ model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] }],
+         lock: transaction.LOCK.UPDATE, // Lock only the Raffle row
        });
 
 
@@ -1113,7 +1111,7 @@ export class RaffleService {
         this.logger.warn(`Tentativa de finalizar rifa tradicional ${raffleId} que já está finalizada.`);
         if (!transactionHost) await transaction.commit();
         // Reload with necessary relations before returning (already included in the initial fetch)
-        // await raffle.reload({ ... }); // Not needed if already included
+        // This reload needs to happen AFTER commit if transactionHost is undefined
         return raffle;
       }
       if (raffle.type !== 'tradicional') {
@@ -1140,8 +1138,15 @@ export class RaffleService {
       this.logger.log(`Finalizando Rifa Tradicional ${raffleId}. Bilhete Sorteado (interno): ${winningTicketNumberInternal}. isExtra: ${raffle.isExtra}`);
 
 
-      // Find the winning ticket from the already included tickets
-      const winningTicket = raffle.tickets?.find(t => t.ticketNumber === winningTicketNumberInternal);
+      // Step 2: Fetch tickets with user and referrer info *within the same transaction*, without locking them
+      const tickets = await this.raffleTicketModel.findAll({
+           where: { raffleId: raffle.id },
+           include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }],
+           transaction // Use the same transaction
+       });
+
+      // Find the winning ticket from the fetched tickets
+      const winningTicket = tickets?.find(t => t.ticketNumber === winningTicketNumberInternal);
 
       let winnerUserId: number | null = null;
       const totalCollectedValue = Number(raffle.ticketPrice) * Number(raffle.soldTickets);
@@ -1151,7 +1156,7 @@ export class RaffleService {
       let mainWinnerReferrerActive = false; // Track referrer activity status
 
       if (winningTicket && winningTicket.user) {
-        const winnerUser = winningTicket.user; // User model fetched with referrerId
+        const winnerUser = winningTicket.user; // User model fetched with referrerId and referrer relation
         winnerUserId = winnerUser.id;
         this.logger.log(`Bilhete ${winningTicketNumberInternal} (usuário ${winnerUserId} - ${winnerUser.name}) é o vencedor.`);
 
@@ -1164,11 +1169,14 @@ export class RaffleService {
         // Check if winner has a referrer and award commission (paid by the house)
         if (winnerUser.referrerId) {
              this.logger.log(`Usuário ${winnerUserId} (ganhador) foi indicado por ${winnerUser.referrerId}.`);
-             const referrerUser = await this.authService.findReferrerById(winnerUser.id, transaction); // Buscar indicador na transação
+             // O referrer já está incluído no winnerUser fetched with the ticket
+             const referrerUser = winnerUser.referrer; // Acessa a relação incluída
 
             if (referrerUser) {
                 // Check if the referrer played any game this month
+                // Call hasPlayedThisMonth with the referrer's ID and the transaction
                 mainWinnerReferrerActive = await this.authService.hasPlayedThisMonth(referrerUser.id, transaction);
+
 
                 const commissionAmount = totalCollectedValue * 0.05; // 5% DO TOTAL COLETADO (pago pela Casa)
 
@@ -1185,7 +1193,8 @@ export class RaffleService {
                 }
 
             } else {
-                 this.logger.warn(`Indicador (ID ${winnerUser.referrerId}) do usuário ganhador ${winnerUserId} não encontrado. Comissão não aplicável/creditada.`);
+                 // Isso só aconteceria se referrerId existisse no ticket->user, mas o user correspondente (referrer) não fosse encontrado
+                 this.logger.warn(`Indicador (ID ${winnerUser.referrerId}) do usuário ganhador ${winnerUserId} não encontrado mesmo incluído. Comissão não aplicável/creditada.`);
                  mainWinnerReferrerCommission = 0;
                  mainWinnerReferrerActive = false; // Não há indicador válido
             }
@@ -1215,19 +1224,30 @@ export class RaffleService {
 
       this.logger.log(`Rifa Tradicional ${raffleId} finalizada com sucesso.`);
 
-      // Step 5: Reload to get updated relations and attach details for formatRaffleDetails
-      // Need winnerUser with referrer and tickets with users+referrer for formatRaffleDetails
+      // Step 5: Reload to get updated relations FOR THE RETURN VALUE.
+      // This reload happens AFTER the transaction commits (if it was local).
+      // The data needed *during* the transaction was fetched explicitly.
        await raffle.reload({
             include: [
+                 // Include necessary relations for formatRaffleDetails AFTER the transaction
                 { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
-                { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'] }] }
+                { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] }, // Include referrer here for tickets
+                { model: RaffleNumber, include: [ { model: GeneratedNumber, include: [ { model: Seed, include: [BlockchainHash] } ] } ] },
             ],
-            transaction // Use transaction for reload if it's still active (though likely committed here)
+             // DO NOT pass transaction here if transactionHost was undefined (it's already committed)
         });
+
         // Attach the calculated active status and commission amount for formatRaffleDetails
+        // These values are needed by calculatePrizeDetails when formatRaffleDetails is called on the reloaded object
         (raffle as any).mainWinnerReferrerActive = mainWinnerReferrerActive;
-         (raffle as any).mainWinnerReferrerCommission = mainWinnerReferrerCommission; // Attach the calculated commission
-         (raffle as any).mainWinnerPrize = actualWinnerPrize; // Attach the calculated winner prize
+         (raffle as any).mainWinnerReferrerCommission = mainWinnerReferrerCommission;
+         (raffle as any).mainWinnerPrize = actualWinnerPrize;
+        // Ensure team properties are set to defaults for traditional raffle
+         (raffle as any).winningTeamName = null;
+         (raffle as any).numberOfWinningTeamMembersReceivingPrize = null;
+         (raffle as any).teamMembersTotalPrize = 0;
+         (raffle as any).teamMembersReferrerCommissionTotal = 0;
+         (raffle as any).winningTeamMembersDetails = [];
 
 
       return raffle;
@@ -1570,7 +1590,7 @@ async getUserRaffleData(userId: number): Promise<any> {
       const teamTicketsInternal: string[] = []; // Armazena 00-99 internamente
       const membersMap = new Map<number, { id: number; name: string; tickets: string[] }>(); // Mapa de membros por ID
 
-      for (let j = 0; j < ticketsPerTeam; j++) { // Corrigido loop de j
+      for (let j = 0; j < ticketsPerTeam; j++) {
         const ticketNumberInternal = (i * ticketsPerTeam + j).toString().padStart(2, '0'); // 00-99
         // Verificar se o ticketNumberInternal está dentro do range totalTickets
         if (i * ticketsPerTeam + j < totalTickets) {
@@ -1615,12 +1635,10 @@ async getUserRaffleData(userId: number): Promise<any> {
       let raffle; // Declare raffle outside try
 
       try {
-        // Step 1: Find and lock the Raffle row
-        // Include ALL tickets with their users and referrer info for prize distribution logic AND for reload/return value
+        // Step 1: Find and lock the Raffle row ONLY. REMOVE INCLUDE FROM THIS STEP.
         raffle = await this.raffleModel.findByPk(raffleId, {
           transaction,
-          lock: transaction.LOCK.UPDATE,
-          include: [{ model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] }],
+          lock: transaction.LOCK.UPDATE, // Lock only the Raffle row
         });
 
 
@@ -1632,7 +1650,6 @@ async getUserRaffleData(userId: number): Promise<any> {
              this.logger.warn(`Tentativa de finalizar rifa de equipes ${raffleId} que já está finalizada.`);
              if (!transactionHost) await transaction.commit();
              // Reload before returning (already included in the initial fetch)
-             // await raffle.reload({...}); // Not needed if already included
              return raffle;
         }
          if (raffle.type !== 'equipes') {
@@ -1658,8 +1675,13 @@ async getUserRaffleData(userId: number): Promise<any> {
          }
         this.logger.log(`Finalizando Rifa de Equipes ${raffleId}. Bilhete Sorteado (interno): ${winningTicketNumberInternal}. isExtra: ${raffle.isExtra}`);
 
-        // Use the already included tickets
-        const tickets = raffle.tickets || [];
+        // Step 2: Fetch tickets with user and referrer info *within the same transaction*, without locking them
+        const tickets = await this.raffleTicketModel.findAll({
+            where: { raffleId: raffle.id },
+            include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }],
+            transaction // Use the same transaction
+        });
+
 
         // --- Calculation and Distribution Logic ---
         const totalCollectedValue = Number(raffle.ticketPrice) * Number(raffle.soldTickets);
@@ -1676,14 +1698,13 @@ async getUserRaffleData(userId: number): Promise<any> {
 
         let teamMembersTotalPrize = 0; // Total prêmio membros equipe (líquido)
         let teamMembersReferrerCommissionTotal = 0; // Total comissão indicadores membros equipe (pagas pela casa)
-        let teamMemberReferrerActiveStatuses: { userId: number, isActive: boolean }[] = []; // Track referrer activity status for each team member
         const winningTeamMembersDetails: any[] = []; // Para popular o retorno formatado
 
         let numberOfWinningTeamMembersReceivingPrize = 0;
 
         // 1. Processar Ganhador Principal (50%)
         const mainWinningTicket = tickets.find(t => t.ticketNumber === winningTicketNumberInternal);
-        const mainWinnerUser = mainWinningTicket?.user; // User model fetched with referrerId
+        const mainWinnerUser = mainWinningTicket?.user; // User model fetched with referrerId and referrer relation
 
         if (mainWinnerUser) {
             mainWinnerPrize = actualMainPrizePool; // Ganhador principal recebe 50% do total coletado
@@ -1698,7 +1719,8 @@ async getUserRaffleData(userId: number): Promise<any> {
             // Check if main winner has a referrer and award commission (paid by the house)
             if (mainWinnerUser.referrerId) {
                  this.logger.log(`Ganhador Principal ${mainWinnerUser.id} foi indicado por ${mainWinnerUser.referrerId}.`);
-                 const referrerUser = await this.authService.findReferrerById(mainWinnerUser.id, transaction);
+                 // O referrer já está incluído no winnerUser fetched with the ticket
+                 const referrerUser = mainWinnerUser.referrer; // Acessa a relação incluída
 
                  if (referrerUser) {
                     mainWinnerReferrerActive = await this.authService.hasPlayedThisMonth(referrerUser.id, transaction);
@@ -1720,7 +1742,8 @@ async getUserRaffleData(userId: number): Promise<any> {
                          mainWinnerReferrerCommission = 0; // Comissão não creditada é 0
                     }
                  } else {
-                     this.logger.warn(`Indicador (ID ${mainWinnerUser.referrerId}) do Ganhador Principal ${mainWinnerUser.id} não encontrado. Comissão não aplicável/creditada.`);
+                     // Isso só aconteceria se referrerId existisse no ticket->user, mas o user correspondente (referrer) não fosse encontrado
+                     this.logger.warn(`Indicador (ID ${mainWinnerUser.referrerId}) do Ganhador Principal ${mainWinnerUser.id} não encontrado mesmo incluído. Comissão não aplicável/creditada.`);
                      mainWinnerReferrerCommission = 0;
                      mainWinnerReferrerActive = false; // Não há indicador válido
                  }
@@ -1747,7 +1770,7 @@ async getUserRaffleData(userId: number): Promise<any> {
                             (mainWinnerUser ? ticket.userId !== mainWinnerUser.id : true) // Excluir o ganhador principal pelo ID se ele existe
             );
 
-            const teamMemberUsersWhoBought = new Map<number, User>(); // Map UserID -> User model (with referrerId)
+            const teamMemberUsersWhoBought = new Map<number, User>(); // Map UserID -> User model (with referrerId and referrer relation)
             winningTeamTickets.forEach(ticket => {
                 if (ticket.user) { // Ensure ticket has a user
                      // Usar apenas o primeiro ticket encontrado por usuário para pegar a instância de usuário
@@ -1776,7 +1799,8 @@ async getUserRaffleData(userId: number): Promise<any> {
                     // Check if this team member has a referrer and if referrer is active this month
                     if (user.referrerId) {
                          this.logger.log(`Membro da equipe vencedora ${user.id} foi indicado por ${user.referrerId}.`);
-                         const referrerUser = await this.authService.findReferrerById(user.id, transaction);
+                         // O referrer já está incluído no user fetched with the ticket
+                         const referrerUser = user.referrer; // Acessa a relação incluída
 
                          if (referrerUser) {
                               memberReferrerActive = await this.authService.hasPlayedThisMonth(referrerUser.id, transaction);
@@ -1798,7 +1822,8 @@ async getUserRaffleData(userId: number): Promise<any> {
                                 memberReferrerCommissionShare = 0; // Comissão não creditada é 0
                              }
                          } else {
-                            this.logger.warn(`Indicador (ID ${user.referrerId}) do membro da equipe ${user.id} não encontrado. Comissão não aplicável/creditada.`);
+                            // Isso só aconteceria se referrerId existisse no ticket->user, mas o user correspondente (referrer) não fosse encontrado
+                            this.logger.warn(`Indicador (ID ${user.referrerId}) do membro da equipe ${user.id} não encontrado mesmo incluído. Comissão não aplicável/creditada.`);
                             memberReferrerCommissionShare = 0;
                             memberReferrerActive = false; // Não há indicador válido
                          }
@@ -1860,9 +1885,10 @@ async getUserRaffleData(userId: number): Promise<any> {
          await raffle.reload({
                include: [
                     { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
-                    { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'] }] }
+                    { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] }, // Include referrer here for tickets
+                    { model: RaffleNumber, include: [{ model: GeneratedNumber, include: [{ model: Seed, include: [BlockchainHash] }] }] },
                 ],
-               transaction // Use transaction for reload if applicable
+               // DO NOT pass transaction here if transactionHost was undefined (it's already committed)
            });
 
         // The calculated details are attached before commit and should be available on the reloaded object
