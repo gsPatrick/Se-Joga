@@ -133,6 +133,7 @@ export class RaffleService {
 
 
   // Função auxiliar para calcular detalhes do prêmio (usada para exibição)
+  // Função auxiliar para calcular detalhes do prêmio (usada para exibição)
   private calculatePrizeDetails(raffle: Raffle): any {
     // totalCollectedValue é o valor arrecadado com base nos bilhetes *vendidos*
     const totalCollectedValue = Number(raffle.ticketPrice) * Number(raffle.soldTickets);
@@ -193,13 +194,21 @@ export class RaffleService {
 
         // Descrição para rifa FINALIZADA
          if (raffle.type === 'tradicional') {
+             // --- CORREÇÃO NA DESCRIÇÃO AQUI ---
+             // A lógica de cálculo actualWinnerPrize e mainWinnerReferrerCommission está CORRETA
+             // (85% do coletado para o ganhador, 5% DO PRÊMIO DO GANHADOR para o indicador)
+             // O ERRO estava APENAS na string de descrição que dizia "5% do total arrecadado".
+             const winnerPrizePercentage = 85; // Prêmio do ganhador é 85% do total
+             const referrerCommissionPercentageOfPrize = 5; // A comissão é 5% DO PRÊMIO DO GANHADOR
+             const estimatedCommissionPercentageOfTotal = (winnerPrizePercentage * referrerCommissionPercentageOfPrize) / 100; // 5% de 85% = 4.25% do total arrecadado.
+
              return {
                  totalCollected: totalCollectedValue,
-                 houseShare: actualHouseShare,
+                 houseShare: actualHouseShare, // Este valor já reflete a dedução da comissão paga
                  totalDistributedToPlayers: actualTotalPrizeDistributedToPlayers,
                  totalReferrerCommissionPaid: totalReferrerCommissionPaid,
-                 mainWinnerPrize: mainWinnerPrize, // Prêmio real pago ao ganhador principal
-                 mainWinnerReferrerCommission: mainWinnerReferrerCommission, // Comissão real paga ao indicador
+                 mainWinnerPrize: mainWinnerPrize,
+                 mainWinnerReferrerCommission: mainWinnerReferrerCommission,
                  mainWinnerReferrerActive: mainWinnerReferrerActive,
                  teamPrizePoolPotential: 0, // N/A
                  teamMembersTotalPrize: 0, // N/A
@@ -207,7 +216,9 @@ export class RaffleService {
                  teamMembersDetails: [], // N/A
                  winningTeamName: null, // N/A
                  numberOfWinningTeamMembersReceivingPrize: null, // N/A
-                 details: `Distribuição Finalizada (Base em R$ ${totalCollectedValue.toFixed(2)} coletados): Ganhador recebeu R$ ${mainWinnerPrize.toFixed(2)} (85% do total). Se o ganhador teve indicador ativo no mês, este recebeu R$ ${mainWinnerReferrerCommission.toFixed(2)} (5% do total arrecadado) como bônus de indicação, PAGO PELA CASA. A Casa reteve R$ ${actualHouseShare.toFixed(2)} (15% base menos comissões pagas, ou 15% base mais prêmio do jogador se ninguém ganhou).`,
+                 // --- STRING DE DESCRIÇÃO CORRIGIDA ---
+                 details: `Distribuição Finalizada (Base em R$ ${totalCollectedValue.toFixed(2)} coletados): Ganhador recebeu R$ ${mainWinnerPrize.toFixed(2)} (${winnerPrizePercentage}% do total). Se o ganhador teve indicador ativo no mês, este recebeu R$ ${mainWinnerReferrerCommission.toFixed(2)} (${referrerCommissionPercentageOfPrize}% do prêmio do ganhador, equivalente a ${estimatedCommissionPercentageOfTotal.toFixed(2)}% do total arrecadado) como bônus de indicação, PAGO PELA CASA. A Casa reteve R$ ${actualHouseShare.toFixed(2)} (${(100 - winnerPrizePercentage - estimatedCommissionPercentageOfTotal).toFixed(2)}% se comissão paga, ou ${100 - winnerPrizePercentage}% se comissão não paga).`,
+                 // -------------------------------------
              };
          } else if (raffle.type === 'equipes') {
               return {
@@ -224,6 +235,7 @@ export class RaffleService {
                  teamMembersDetails: teamMembersDetails, // Detalhes reais dos membros
                  winningTeamName: winningTeamName,
                  numberOfWinningTeamMembersReceivingPrize: numberOfWinningTeamMembersReceivingPrize,
+                 // Description for team raffle seems correct, stating 5% of the INDIVIDUAL prize
                  details: `Distribuição Finalizada (Base em R$ ${totalCollectedValue.toFixed(2)} coletados):` +
                        ` Prêmio Principal (50%): Ganhador recebeu R$ ${mainWinnerPrize.toFixed(2)}. Se teve indicador ativo no mês, este recebeu R$ ${mainWinnerReferrerCommission.toFixed(2)} (5% do prêmio do ganhador principal), PAGO PELA CASA.` +
                        ` Pool Equipe Vencedora (${winningTeamName ?? 'N/A'}) (30%): Distribuído R$ ${teamMembersTotalPrize.toFixed(2)} entre ${numberOfWinningTeamMembersReceivingPrize ?? 0} membro(s) elegíveis. Para CADA membro elegível, se ele teve indicador ativo no mês, este recebeu 5% DA SUA PARTE INDIVIDUAL como bônus de indicação, PAGO PELA CASA (Total comissões equipe: R$ ${teamMembersReferrerCommissionTotal.toFixed(2)}).` +
@@ -236,12 +248,8 @@ export class RaffleService {
         // Se a rifa NÃO finalizou, calculamos valores POTENCIAIS (se todos os bilhetes fossem vendidos)
         const potentialMainPrize = totalPotentialValue * (raffle.type === 'tradicional' ? 0.85 : 0.50);
         const potentialTeamPrizePool = raffle.type === 'equipes' ? (totalPotentialValue * 0.30) : 0;
-        // Comissão do indicador principal é 5% do PRÊMIO POTENCIAL PRINCIPAL
         const potentialReferrerCommissionMain = potentialMainPrize * 0.05; // 5% DO PRÊMIO POTENCIAL PRINCIPAL
-        // Comissão estimada para membros da equipe: 5% da parte individual estimada.
-        // Para a estimativa total, vamos usar 5% do pool da equipe total.
          const potentialTeamMembersReferrerCommissionTotal = potentialTeamPrizePool * 0.05; // Estimativa simplificada: 5% do pool da equipe total
-
 
          if (raffle.type === 'tradicional') {
              return {
@@ -284,7 +292,7 @@ export class RaffleService {
     }
 
     // Caso surja um novo tipo de rifa não tratado
-    return null;
+    return null; // Should not be reached if raffle.type is handled
   }
 
   // Função auxiliar para formatar bilhete (0-99 para 1-100)
