@@ -75,31 +75,27 @@ import { VersionModule } from './version/version.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
-      // Usar ignoreEnvFile para produção se as vars de ambiente vierem de outro lugar
-      // ignoreEnvFile: process.env.NODE_ENV === 'production',
-      envFilePath: '.env', // Manter .env para dev
-      isGlobal: true, // Torna ConfigModule disponível globalmente
+      envFilePath: '.env',
+      isGlobal: true,
     }),
 
     SequelizeModule.forRootAsync({
-      imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => {
+      imports: [ConfigModule], // Ainda é bom manter o ConfigModule importado aqui para o inject
+      useFactory: async (configService: ConfigService) => { // ConfigService ainda injetado, mas não usado para essas vars
         console.log("***** SEQUELIZE CONFIGURATION FACTORY IS RUNNING! *****");
 
         // *** ADVERTÊNCIA: CREDENCIAIS HARDCODED ***
-        // ISTO É APENAS PARA FACILITAR TESTES INICIAIS EM AMBIENTES DEV ISOLADOS.
-        // NUNCA USE CREDENCIAIS DIRETAMENTE NO CÓDIGO EM PRODUÇÃO!
-        // Idealmente, use configService.get<string>('DB_HOST') etc. para buscar de .env
-        // ou variáveis de ambiente.
-        const dbHost = configService.get<string>('DB_HOST', 'sejogadev');
-        const dbPort = configService.get<number>('DB_PORT', 5432);
-        const dbUser = configService.get<string>('DB_USER', 'sejogadev');
-        const dbPassword = configService.get<string>('DB_PASSWORD', 'sejogadev');
-        const dbName = configService.get<string>('DB_NAME', 'sejogadev');
+        // Usando valores fixos conforme solicitado.
+        // Lembre-se que o ideal é usar variáveis de ambiente (via ConfigService) em produção.
+        const dbHost = 'sejogadev';
+        const dbPort = 5432;
+        const dbUser = 'sejogadev';
+        const dbPassword = 'sejogadev';
+        const dbName = 'sejogadev';
         // *** FIM DA ADVERTÊNCIA ***
 
 
-        // Lista de modelos completa incluindo os novos modelos de Pagamento e Versionamento
+        // Lista de modelos completa
         const allModels = [
             User, Raffle, RaffleTicket, RouletteRound, RouletteBet, SlotMachineRound, SlotMachineBet,
             BingoGame, BingoCard, BingoNumber, BingoGameRound, BingoGameRoundNumber, DiceRound, DiceBet,
@@ -107,12 +103,9 @@ import { VersionModule } from './version/version.module';
             UserChallengeFirstTo1000Round, RaffleNumber, Bet, BetGameRound, BetGameRoundSeed, GeneratedNumber,
             BlockchainHash, DiceRoundSeed, BingoGameSeed, Seed, PokerRound, PokerPlayer, PokerHand, PokerBet,
             PokerRoundSeed,
-            // --- Novos modelos de Pagamento ---
             Deposit,
             Withdrawal,
-            // --- Novo modelo de Versionamento APK ---
             AppVersion,
-            // --- Fim da adição ---
         ];
 
         console.log(`
@@ -131,17 +124,17 @@ import { VersionModule } from './version/version.module';
           password: dbPassword,
           database: dbName,
           dialectOptions: {
-            ssl: false, // SSL DESATIVADO (conforme seu código original)
-            schema: 'public', // Força usar o schema "public" (conforme seu código original)
+            ssl: false,
+            schema: 'public',
           },
-          models: allModels, // Usa a lista completa de modelos
-          autoLoadModels: true, // Carrega modelos automaticamente
-          synchronize: false, // *** ALTERADO: NÃO sincroniza automaticamente o schema ***
-          force: false,       // *** ALTERADO: NÃO força a deleção de tabelas ***
-          logging: (sql) => { console.log('[SEQUELIZE SQL]:', sql); }, // Mostra o SQL gerado
+          models: allModels,
+          autoLoadModels: true,
+          synchronize: false, // *** MANTIDO: NÃO sincroniza automaticamente o schema ***
+          force: false,       // *** MANTIDO: NÃO força a deleção de tabelas ***
+          logging: (sql) => { console.log('[SEQUELIZE SQL]:', sql); },
         };
       },
-      inject: [ConfigService],
+      inject: [ConfigService], // ConfigService injetado
     }),
 
     // Seus Módulos de Funcionalidade
@@ -155,20 +148,10 @@ import { VersionModule } from './version/version.module';
     PokerModule,
     CacaNiquelModule,
 
-    // Módulo para tarefas agendadas (@Cron, etc.)
     ScheduleModule.forRoot(),
-
-    // --- Novo Módulo de Pagamento ---
     PaymentModule,
-    // --- Fim da adição ---
-
-    // --- Novo Módulo de Relatórios ---
     ReportModule,
-    // --- Fim da adição ---
-
-    // --- Novo Módulo de Versionamento APK ---
     VersionModule,
-    // --- Fim da adição ---
   ],
   providers: [Logger],
   exports: [SequelizeModule],
