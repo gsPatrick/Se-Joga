@@ -641,7 +641,16 @@ export class RaffleService {
     try {
       const user = await this.userModel.findByPk(userId, { transaction, lock: transaction.LOCK.UPDATE });
       if (!user) {
+        await transaction.rollback(); // Adicionado rollback se usuário não encontrado antes de qualquer outra coisa
         throw new NotFoundException('Usuário não encontrado.');
+      }
+
+      // Converter o saldo do usuário para número AQUI e verificar
+      const userBalanceNumeric = parseFloat(user.balance as any);
+      if (isNaN(userBalanceNumeric)) {
+          this.logger.error(`Saldo do usuário ${userId} (valor: "${user.balance}") não pôde ser convertido para um número válido.`);
+          await transaction.rollback();
+          throw new InternalServerErrorException('Formato de saldo do usuário inválido.');
       }
 
       const raffle = await this.raffleModel.findByPk(raffleId, {
@@ -662,6 +671,15 @@ export class RaffleService {
           throw new BadRequestException(`Tipo de compra (${ticketData.type}) incompatível com o tipo da rifa (${raffle.type}).`);
       }
 
+      // Converter o preço do bilhete para número e verificar
+      const ticketPriceNumeric = parseFloat(raffle.ticketPrice as any);
+      if (isNaN(ticketPriceNumeric)) {
+        this.logger.error(`Preço do bilhete da rifa ${raffleId} (valor: "${raffle.ticketPrice}") não pôde ser convertido para um número válido.`);
+        await transaction.rollback();
+        throw new InternalServerErrorException('Formato de preço do bilhete inválido.');
+      }
+
+
       const existingTicketsData = await this.raffleTicketModel.findAll({
           where: { raffleId: raffle.id },
           attributes: ['ticketNumber'],
@@ -678,6 +696,7 @@ export class RaffleService {
       if (typeof ticketData.quantityOrNumbers === 'number') {
         quantity = ticketData.quantityOrNumbers;
         if (quantity <= 0) {
+             await transaction.rollback(); // Adicionado rollback
              throw new BadRequestException('A quantidade de bilhetes deve ser maior que zero.');
         }
         if (quantity > availableSlots) {
@@ -693,6 +712,7 @@ export class RaffleService {
         ticketNumbersToBuy = requestedNumbersFront.map(numStr => {
             const num = parseInt(numStr, 10);
             if (isNaN(num) || num < 1 || num > raffle.totalTickets) {
+                // Não precisa de rollback aqui pois ainda não alteramos nada crítico
                 throw new BadRequestException(`Número de bilhete inválido: ${numStr}. Deve ser entre 1 e ${raffle.totalTickets}.`);
             }
             return (num - 1).toString().padStart(2, '0');
@@ -700,6 +720,7 @@ export class RaffleService {
 
         quantity = ticketNumbersToBuy.length;
          if (quantity <= 0) {
+             await transaction.rollback(); // Adicionado rollback
              throw new BadRequestException('Nenhum número de bilhete fornecido.');
         }
 
@@ -717,7 +738,7 @@ export class RaffleService {
               `Os seguintes bilhetes (formato 1-100) estão duplicados na sua requisição: ${duplicatesInRequest.map(this.formatTicketNumberDisplay).join(', ')}`,
             );
         }
-        if (quantity > availableSlots) {
+        if (quantity > availableSlots) { // Esta verificação deve usar a quantidade real de números únicos solicitados.
             await transaction.rollback();
            throw new BadRequestException(
              `Você tentou comprar ${quantity} bilhetes, mas apenas ${availableSlots} estão disponíveis.`
@@ -725,10 +746,10 @@ export class RaffleService {
         }
       }
 
-      const totalCost = Number(raffle.ticketPrice) * quantity;
-      if (user.balance < totalCost) {
+      const totalCost = ticketPriceNumeric * quantity; // Usa o preço numérico
+      if (userBalanceNumeric < totalCost) { // Usa o saldo numérico
          await transaction.rollback();
-        throw new BadRequestException(`Saldo insuficiente. Necessário: R$ ${totalCost.toFixed(2)}, Disponível: R$ ${user.balance.toFixed(2)}.`);
+        throw new BadRequestException(`Saldo insuficiente. Necessário: R$ ${totalCost.toFixed(2)}, Disponível: R$ ${userBalanceNumeric.toFixed(2)}.`);
       }
 
       const createdTickets = await this.raffleTicketModel.bulkCreate(
@@ -740,7 +761,7 @@ export class RaffleService {
         { transaction },
       );
 
-      await this.authService.updateUserBalance(user.id, -totalCost, transaction);
+      await this.authService.updateUserBalance(user.id, -totalCost, transaction); // totalCost já é numérico
 
       const newSoldCount = existingTicketNumbers.size + quantity;
       await raffle.update(
@@ -750,7 +771,8 @@ export class RaffleService {
 
       if (newSoldCount >= raffle.totalTickets) {
           this.logger.log(`Rifa ${raffle.id} (tipo: ${raffle.type}, isExtra: ${raffle.isExtra}) esgotou com esta compra. Verificando necessidade de criar próxima...`);
-          this.createNextRaffleIfNeeded(raffle.type, Number(raffle.ticketPrice), raffle.isExtra).catch(err => {
+          // Usar ticketPriceNumeric que já é um número
+          this.createNextRaffleIfNeeded(raffle.type, ticketPriceNumeric, raffle.isExtra).catch(err => {
               this.logger.error(`Erro (não bloqueante) ao tentar criar próxima rifa após esgotamento da ${raffle.id}: ${err.message}`);
           });
       }
@@ -764,33 +786,35 @@ export class RaffleService {
       return createdTickets;
 
     } catch (error) {
-      if (transaction && (transaction as any).finished === null) {
+      if (transaction && (transaction as any).finished === null) { // Verifica se a transação não foi finalizada (commit/rollback)
             try {
                 await transaction.rollback();
-                this.logger.warn(`Rollback executado para transação de compra da rifa ${raffleId} por usuário ${userId} devido a erro no catch.`);
+                this.logger.warn(`Rollback executado para transação de compra da rifa ${raffleId} por usuário ${userId} devido a erro no catch: ${(error as Error).message}`);
             } catch (rollbackError: any) {
-                 if (!rollbackError.message?.includes('already')) {
-                    this.logger.error(`Erro ao tentar executar rollback no CATCH para compra da rifa ${raffleId} por ${userId}: ${rollbackError}`);
+                 // Evitar logar erro de rollback se já foi feito ou não é necessário
+                 if (!rollbackError.message?.includes('already rollbacked') && !rollbackError.message?.includes('not in progress')) {
+                    this.logger.error(`Erro crítico ao tentar executar rollback no CATCH para compra da rifa ${raffleId} por ${userId}: ${rollbackError}`);
                  }
             }
        }
 
-      if (error instanceof NotFoundException || error instanceof BadRequestException) {
-        throw error;
+      if (error instanceof NotFoundException || error instanceof BadRequestException || error instanceof InternalServerErrorException) {
+        throw error; // Re-throw known errors
       }
 
        if (error instanceof Error && error.message?.includes('Insufficient balance during transaction')) {
-            throw new BadRequestException('Saldo insuficiente para concluir a compra.');
+            throw new BadRequestException('Saldo insuficiente para concluir a compra.'); // Mais específico
        }
 
       this.logger.error(
         `Erro capturado no CATCH ao comprar bilhetes para rifa ${raffleId} por usuário ${userId}: ${(error as any).message}`, (error as any).stack
       );
 
-      if (error instanceof Error && error.message?.includes('FOR UPDATE cannot be applied')) {
+      // Tratar erros de concorrência de forma mais genérica se não forem os já tratados
+      if (error instanceof Error && (error.message?.includes('FOR UPDATE cannot be applied') || error.message?.includes('could not serialize access'))) {
            throw new InternalServerErrorException('Erro temporário ao processar compra devido a concorrência. Por favor, tente novamente.');
       }
-
+      // Fallback para outros erros
       throw new InternalServerErrorException('Erro interno ao processar a compra de bilhetes.');
     }
   }
@@ -804,6 +828,11 @@ export class RaffleService {
         }
     }
 
+    // Embaralhar para aleatoriedade se necessário, ou apenas pegar os primeiros 'quantity'
+    // Se a ordem não importa e precisa ser rápido:
+    // if (availableNumbers.length < quantity) throw new Error("Logic error: Not enough available numbers after filtering.");
+
+    // Embaralhar (Fisher-Yates shuffle)
     for (let i = availableNumbers.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [availableNumbers[i], availableNumbers[j]] = [availableNumbers[j], availableNumbers[i]];
@@ -1328,7 +1357,7 @@ export class RaffleService {
          }
           if (raffle.type === 'equipes' && raffle.finished) {
               const winningTicketNumberInternal = raffle.winningTicket;
-               if (!winningTicketNumberInternal) return true;
+               if (!winningTicketNumberInternal) return true; // Se não há bilhete vencedor, todos os participantes perdem
 
               const winningTeamName = this.getTeamNameByTicketNumber(raffle, winningTicketNumberInternal);
 
@@ -1336,14 +1365,14 @@ export class RaffleService {
                   const userTicketsInThisRaffle = raffle.tickets?.filter(ticket => ticket.userId === userId) || [];
                   const wonTeamPrize = userTicketsInThisRaffle.some(ticket =>
                       this.getTeamNameByTicketNumber(raffle, ticket.ticketNumber) === winningTeamName &&
-                      ticket.userId !== raffle.winnerUserId
+                      ticket.userId !== raffle.winnerUserId // Se ele já ganhou o prêmio principal, não conta como perdido aqui
                   );
-                  if (wonTeamPrize) {
+                  if (wonTeamPrize) { // Se ele ganhou o prêmio da equipe (e não o principal)
                        return false;
                   }
                }
           }
-         return true;
+         return true; // Se não ganhou nem o principal nem o da equipe (ou é rifa tradicional e não é o winnerUserId)
      });
 
     return lostRaffles.map(raffle => this.formatRaffleDetails(raffle));
