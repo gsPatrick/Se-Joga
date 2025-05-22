@@ -22,12 +22,12 @@ export class RaffleService {
   public readonly teamNames = [
     'Brasil', 'Alemanha', 'Itália', 'Argentina', 'França',
     'Espanha', 'Inglaterra', 'Uruguai', 'Holanda', 'Portugal',
-    'Bélgica', 'Croácia', 'México', 'Colôbia', 'Chile',
+    'Bélgica', 'Croácia', 'México', 'Colômbia', 'Chile',
     'Paraguai', 'Estados Unidos', 'Rússia', 'Suécia', 'Dinamarca',
     'Servia', 'Japão', 'Coreia do Sul', 'Camarões', 'Nigéria'
   ];
 
-  public readonly fixedRafflePrices = [5, 10, 15, 25, 50, 100]; // Preços fixos
+  public readonly fixedRafflePrices = [5, 10, 20, 30, 50, 100]; // Preços fixos
 
 
   constructor(

@@ -458,5 +458,7 @@ export class AuthService {
         return false; // Nenhuma atividade encontrada neste mês
     }
 
+    
+
   // --- Fim dos métodos de indicação ---
 }

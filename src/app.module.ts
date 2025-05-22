@@ -83,19 +83,20 @@ import { VersionModule } from './version/version.module';
 
     SequelizeModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => { // Mantenha ConfigService injetado
+      useFactory: async (configService: ConfigService) => {
         console.log("***** SEQUELIZE CONFIGURATION FACTORY IS RUNNING! *****");
 
-        // *** ADVERTÊNCIA EXTREMA: CREDENCIAIS HARDCODED ***
+        // *** ADVERTÊNCIA: CREDENCIAIS HARDCODED ***
         // ISTO É APENAS PARA FACILITAR TESTES INICIAIS EM AMBIENTES DEV ISOLADOS.
         // NUNCA USE CREDENCIAIS DIRETAMENTE NO CÓDIGO EM PRODUÇÃO!
-        // USE configService.get<string>('DB_HOST') etc. em produção.
-        const dbHost = 'sejogadev'; // Use configService.get('DB_HOST') em produção!
-        const dbPort = 5432;             // Use configService.get('DB_PORT') em produção!
-        const dbUser = 'sejogadev';         // Use configService.get('DB_USER') em produção!
-        const dbPassword = 'sejogadev';     // Use configService.get('DB_PASSWORD') em produção!
-        const dbName = 'sejogadev';         // Use configService.get('DB_NAME') em produção!
-        // *** FIM DA ADVERTÊNCIA EXTREMA ***
+        // Idealmente, use configService.get<string>('DB_HOST') etc. para buscar de .env
+        // ou variáveis de ambiente.
+        const dbHost = configService.get<string>('DB_HOST', 'sejogadev');
+        const dbPort = configService.get<number>('DB_PORT', 5432);
+        const dbUser = configService.get<string>('DB_USER', 'sejogadev');
+        const dbPassword = configService.get<string>('DB_PASSWORD', 'sejogadev');
+        const dbName = configService.get<string>('DB_NAME', 'sejogadev');
+        // *** FIM DA ADVERTÊNCIA ***
 
 
         // Lista de modelos completa incluindo os novos modelos de Pagamento e Versionamento
@@ -114,16 +115,11 @@ import { VersionModule } from './version/version.module';
             // --- Fim da adição ---
         ];
 
-
-        // --- Configuração para Sincronização Automática COM FORCE TRUE (Altamente Perigoso em Produção!) ---
-        console.warn(`
+        console.log(`
         **********************************************************************
-        *  [DB Setup - **DESTRUTIVO!**] synchronize: true e FORCE: true!     *
-        *  ISSO VAI DELETAR TODOS OS DADOS E TABELAS E RECRIA-LOS!           *
-        *  Use APENAS EM AMBIENTES DE DESENVOLVIMENTO ISOLADOS OU PARA       *
-        *  CRIAR A ESTRUTURA INICIAL EM UM BANCO DE DADOS VAZIO EM DEV.      *
-        *  **NUNCA, JAMAIS USE EM PRODUÇÃO!** Use migrações!                 *
-        *  RISCO GRAVÍSSIMO E CERTO DE PERDA DE DADOS!                       *
+        *  [DB Setup] Conectando ao banco de dados.                          *
+        *  Sincronização automática desabilitada (synchronize: false).       *
+        *  Gerencie o schema do banco de dados usando migrações.             *
         **********************************************************************
         `);
 
@@ -139,13 +135,13 @@ import { VersionModule } from './version/version.module';
             schema: 'public', // Força usar o schema "public" (conforme seu código original)
           },
           models: allModels, // Usa a lista completa de modelos
-          autoLoadModels: true, // Carrega modelos automaticamente (útil com synchronize)
-          synchronize: true, // *** ATIVADO: Cria/atualiza tabelas automaticamente ***
-          force: true,       // *** ATIVADO: DROPA tabelas antes de criar ***
-          logging: (sql) => { console.log('[SEQUELIZE SQL - SYNC]:', sql); }, // Mostra o SQL gerado
+          autoLoadModels: true, // Carrega modelos automaticamente
+          synchronize: false, // *** ALTERADO: NÃO sincroniza automaticamente o schema ***
+          force: false,       // *** ALTERADO: NÃO força a deleção de tabelas ***
+          logging: (sql) => { console.log('[SEQUELIZE SQL]:', sql); }, // Mostra o SQL gerado
         };
       },
-      inject: [ConfigService], // Mantenha o inject
+      inject: [ConfigService],
     }),
 
     // Seus Módulos de Funcionalidade
@@ -171,16 +167,13 @@ import { VersionModule } from './version/version.module';
     // --- Fim da adição ---
 
     // --- Novo Módulo de Versionamento APK ---
-    VersionModule, // <-- ADICIONAR AQUI
+    VersionModule,
     // --- Fim da adição ---
   ],
-  // Adiciona Logger como provider (opcional, mas bom para logs)
   providers: [Logger],
-  // Exporta o SequelizeModule se outros módulos injetarem modelos diretamente
   exports: [SequelizeModule],
 })
 export class AppModule {
-  private readonly logger = new Logger(AppModule.name); // Instancia o Logger
-  // Injecte ConfigService aqui para poder usá-lo se precisar de outras configs no futuro
+  private readonly logger = new Logger(AppModule.name);
   constructor(private readonly configService: ConfigService) {}
 }
