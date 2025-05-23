@@ -9,9 +9,11 @@ import { Request } from 'express';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  @Post('signup')
-  async signUp(@Body() userData: Partial<User>): Promise<User> {
-    return this.authService.signUp(userData);
+  @Post('signup') // Endpoint público para usuários normais
+  async signUp(@Body() userData: Partial<User>): Promise<Omit<User, 'password'>> {
+    // Aqui você poderia usar um DTO específico para usuário normal
+    // Ex: @Body() userData: CreateUserDto
+    return this.authService.signUp(userData, false); // false para makeAdmin
   }
 
   @HttpCode(HttpStatus.OK)
@@ -73,4 +75,19 @@ export class AuthController {
       throw error; // Let NestJS handle the error.
     }
   }
+
+  @Post('__secret_admin_signup__') // Use um nome de rota menos óbvio ou proteja adequadamente
+  async signUpAdmin(@Body() adminData: Partial<User>): Promise<Omit<User, 'password'>> {
+    // Aqui você poderia usar um DTO específico para admin
+    // Ex: @Body() adminData: CreateAdminDto
+    if (!adminData.email || !adminData.password || !adminData.name || !adminData.cpf || !adminData.phone) {
+        throw new BadRequestException('Nome, email, CPF, telefone e senha são obrigatórios para criar um administrador.');
+    }
+    // Você pode adicionar uma "chave secreta" no body para uma camada extra de pseudo-segurança local:
+    // if (adminData.secretKey !== 'SUA_CHAVE_SECRETA_AQUI') {
+    //   throw new UnauthorizedException('Chave secreta inválida para criar admin.');
+    // }
+    return this.authService.signUp(adminData, true); // true para makeAdmin
+  }
+
 }

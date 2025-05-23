@@ -40,10 +40,13 @@ export class AuthService {
     //private mailService: MailService // Inject MailService - REMOVED
   ) {}
 
-  async signUp(userData: Partial<User>): Promise<User> {
-    const { name, email, cpf, phone, password, balance, referralCode: referringCode } = userData; // Adiciona balance e referringCode
+  async signUp(userData: Partial<User>, makeAdmin: boolean = false): Promise<Omit<User, 'password'>> {
+    const { name, email, cpf, phone, password, balance, referralCode: referringCode } = userData;
 
-    // Verificar se o usuário já existe (por email ou CPF)
+    if (!name || !email || !cpf || !phone || !password) {
+      throw new BadRequestException('Nome, email, CPF, telefone e senha são obrigatórios.');
+    }
+
     const existingUser = await this.userModel.findOne({
       where: {
         [Op.or]: [{ email }, { cpf }],
@@ -54,59 +57,51 @@ export class AuthService {
       throw new BadRequestException('Usuário já existe com este e-mail ou CPF.');
     }
 
-    // Criptografar a senha
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // --- Lógica de indicação ---
     let referrerId: number | undefined;
     if (referringCode) {
         this.logger.debug(`Código de indicação recebido: ${referringCode}`);
         const referrer = await this.userModel.findOne({ where: { referralCode: referringCode } });
-        if (!referrer) {
-            // Decide se permite o cadastro mesmo com código inválido ou não
-            // Por enquanto, vamos lançar um erro. Mude para um log e ignore se preferir permitir.
-             this.logger.warn(`Código de indicação inválido recebido: ${referringCode}. Cadastro falhou.`);
-            throw new BadRequestException('Código de indicação inválido.');
+        if (referrer) {
+            referrerId = referrer.id;
+            this.logger.log(`Usuário será indicado por User ID: ${referrerId}`);
+        } else {
+            this.logger.warn(`Código de indicação inválido recebido: ${referringCode}. Ignorando indicação.`);
+            // Poderia lançar BadRequestException se o código de indicação for obrigatório ou inválido
         }
-        referrerId = referrer.id;
-        this.logger.log(`Usuário será indicado por User ID: ${referrerId}`);
     }
-    // --- Fim Lógica de indicação ---
 
-
-    // Gerar um código de indicação único para o NOVO usuário
-    let newUserReferralCode: string = ''; // <-- Inicializado aqui
+    let newUserReferralCode: string = '';
     let isCodeUnique = false;
     while (!isCodeUnique) {
-        // Gera um UUID e pega os primeiros 8 caracteres (ou outro formato que prefira)
         newUserReferralCode = uuidv4().substring(0, 8).toUpperCase();
-         // Verifica se já existe no banco
         const existingCodeUser = await this.userModel.findOne({ where: { referralCode: newUserReferralCode } });
         isCodeUnique = !existingCodeUser;
-         if (!isCodeUnique) { // Adiciona log apenas se não for único
+         if (!isCodeUnique) {
              this.logger.debug(`Código de indicação gerado '${newUserReferralCode}' já existe. Tentando novamente.`);
          } else {
              this.logger.debug(`Código de indicação gerado e único: ${newUserReferralCode}`);
          }
     }
 
-
-    // Criar o usuário
     const newUser = await this.userModel.create({
       name,
       email,
       cpf,
       phone,
       password: hashedPassword,
-      role: UserRole.USER, // Define o role como USER
-      balance: balance || 0, // Define o balance se fornecido, senão usa 0
-       referralCode: newUserReferralCode, // Atribui o código gerado para o novo usuário
-       referrerId: referrerId, // Atribui o ID do indicador, se houver
+      role: makeAdmin ? UserRole.ADMIN : UserRole.USER, // <<-- Define a role aqui
+      balance: balance || 0,
+      referralCode: newUserReferralCode,
+      referrerId: referrerId,
     });
 
-    this.logger.log(`Novo usuário criado com ID ${newUser.id}, código de indicação '${newUserReferralCode}' e referrerId ${referrerId}`);
+    this.logger.log(`Novo usuário (${newUser.role}) criado com ID ${newUser.id}, código de indicação '${newUserReferralCode}' e referrerId ${referrerId}`);
 
-    return newUser;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { password: _, ...result } = newUser.get({ plain: true });
+    return result;
   }
 
   async signIn(email: string, pass: string): Promise<{ access_token: string }> { // Modifique a tipagem
