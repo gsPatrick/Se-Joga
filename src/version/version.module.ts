@@ -20,11 +20,9 @@ import * as fs from 'fs'; // <-- Garantir que fs está importado aqui também
       useFactory: async (configService: ConfigService) => {
         const uploadDir = configService.get<string>('APK_UPLOAD_DIR') || './uploads/apks';
         // Cria o diretório se ele não existir
-        // Removido o require('fs') e usado o import fs ali em cima
-        if (!fs.existsSync(uploadDir)) { // <-- Usando fs.existsSync
-             fs.mkdirSync(uploadDir, { recursive: true }); // <-- Usando fs.mkdirSync
+        if (!fs.existsSync(uploadDir)) {
+             fs.mkdirSync(uploadDir, { recursive: true });
          }
-
 
         return {
           storage: multer.diskStorage({
@@ -32,10 +30,9 @@ import * as fs from 'fs'; // <-- Garantir que fs está importado aqui também
               cb(null, uploadDir);
             },
             filename: (req, file, cb) => {
-              const version = (req.body as any).version || 'unknown';
-              const timestamp = Date.now();
-              const fileExtension = path.extname(file.originalname);
-              const newFilename = `app-${version}-${timestamp}${fileExtension}`;
+              // ALTERADO: Usar nome de arquivo fixo "lotojack-lastversion" com a extensão original do arquivo.
+              const fileExtension = path.extname(file.originalname); // ex: '.apk'
+              const newFilename = `lotojack-lastversion${fileExtension}`;
               cb(null, newFilename);
             },
           }),
