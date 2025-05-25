@@ -6,7 +6,7 @@ import * as bcrypt from 'bcrypt';
 import { Op, Transaction, Sequelize } from 'sequelize'; // Importar Op, Transaction, Sequelize
 import { JwtService } from '@nestjs/jwt';
 import { v4 as uuidv4 } from 'uuid'; // Importar uuidv4
-
+import { sendMessage } from 'src/Whatsapp/sendMessage';
 // Importar modelos de jogos para checar atividade
 import { RaffleTicket } from 'src/models/raffle/raffle-ticket.model';
 import { RouletteBet } from 'src/models/roulette/roulette-bet.model';
@@ -40,13 +40,10 @@ export class AuthService {
     //private mailService: MailService // Inject MailService - REMOVED
   ) {}
 
-  async signUp(userData: Partial<User>, makeAdmin: boolean = false): Promise<Omit<User, 'password'>> {
-    const { name, email, cpf, phone, password, balance, referralCode: referringCode } = userData;
+  async signUp(userData: Partial<User>): Promise<User> {
+    const { name, email, cpf, phone, password, balance, referralCode: referringCode } = userData; // Adiciona balance e referringCode
 
-    if (!name || !email || !cpf || !phone || !password) {
-      throw new BadRequestException('Nome, email, CPF, telefone e senha são obrigatórios.');
-    }
-
+    // Verificar se o usuário já existe (por email ou CPF)
     const existingUser = await this.userModel.findOne({
       where: {
         [Op.or]: [{ email }, { cpf }],
@@ -57,51 +54,61 @@ export class AuthService {
       throw new BadRequestException('Usuário já existe com este e-mail ou CPF.');
     }
 
+    // Criptografar a senha
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // --- Lógica de indicação ---
     let referrerId: number | undefined;
     if (referringCode) {
         this.logger.debug(`Código de indicação recebido: ${referringCode}`);
         const referrer = await this.userModel.findOne({ where: { referralCode: referringCode } });
-        if (referrer) {
-            referrerId = referrer.id;
-            this.logger.log(`Usuário será indicado por User ID: ${referrerId}`);
-        } else {
-            this.logger.warn(`Código de indicação inválido recebido: ${referringCode}. Ignorando indicação.`);
-            // Poderia lançar BadRequestException se o código de indicação for obrigatório ou inválido
+        if (!referrer) {
+            // Decide se permite o cadastro mesmo com código inválido ou não
+            // Por enquanto, vamos lançar um erro. Mude para um log e ignore se preferir permitir.
+             this.logger.warn(`Código de indicação inválido recebido: ${referringCode}. Cadastro falhou.`);
+            throw new BadRequestException('Código de indicação inválido.');
         }
+        referrerId = referrer.id;
+        this.logger.log(`Usuário será indicado por User ID: ${referrerId}`);
     }
+    // --- Fim Lógica de indicação ---
 
-    let newUserReferralCode: string = '';
+
+    // Gerar um código de indicação único para o NOVO usuário
+    let newUserReferralCode: string = ''; // <-- Inicializado aqui
     let isCodeUnique = false;
     while (!isCodeUnique) {
+        // Gera um UUID e pega os primeiros 8 caracteres (ou outro formato que prefira)
         newUserReferralCode = uuidv4().substring(0, 8).toUpperCase();
+         // Verifica se já existe no banco
         const existingCodeUser = await this.userModel.findOne({ where: { referralCode: newUserReferralCode } });
         isCodeUnique = !existingCodeUser;
-         if (!isCodeUnique) {
+         if (!isCodeUnique) { // Adiciona log apenas se não for único
              this.logger.debug(`Código de indicação gerado '${newUserReferralCode}' já existe. Tentando novamente.`);
          } else {
              this.logger.debug(`Código de indicação gerado e único: ${newUserReferralCode}`);
          }
     }
 
+
+    // Criar o usuário
     const newUser = await this.userModel.create({
       name,
       email,
       cpf,
       phone,
       password: hashedPassword,
-      role: makeAdmin ? UserRole.ADMIN : UserRole.USER, // <<-- Define a role aqui
-      balance: balance || 0,
-      referralCode: newUserReferralCode,
-      referrerId: referrerId,
+      role: UserRole.USER, // Define o role como USER
+      balance: balance || 0, // Define o balance se fornecido, senão usa 0
+       referralCode: newUserReferralCode, // Atribui o código gerado para o novo usuário
+       referrerId: referrerId, // Atribui o ID do indicador, se houver
     });
+    
+    await sendMessage(phone, newUserReferralCode)
 
-    this.logger.log(`Novo usuário (${newUser.role}) criado com ID ${newUser.id}, código de indicação '${newUserReferralCode}' e referrerId ${referrerId}`);
+    this.logger.log(`Novo usuário criado com ID ${newUser.id}, código de indicação '${newUserReferralCode}' e referrerId ${referrerId}`);
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { password: _, ...result } = newUser.get({ plain: true });
-    return result;
+    return newUser;
   }
 
   async signIn(email: string, pass: string): Promise<{ access_token: string }> { // Modifique a tipagem
@@ -452,8 +459,6 @@ export class AuthService {
         this.logger.debug(`Usuário ${userId} NÃO jogou nenhum jogo este mês.`);
         return false; // Nenhuma atividade encontrada neste mês
     }
-
-    
 
   // --- Fim dos métodos de indicação ---
 }
