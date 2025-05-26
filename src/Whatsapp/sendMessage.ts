@@ -8,7 +8,7 @@ function formatPhoneNumber(phone: string): string {
   }
   return numbers;
 }
-
+ 
 export async function sendMessage(numero: string, codigo: string): Promise<any> {
   const instanceId = process.env.INSTANCE_ID;
   const apiKey = process.env.API_KEY;
