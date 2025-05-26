@@ -34,34 +34,53 @@ export async function sendMessage(numero: string | number, codigo: string): Prom
 
     const url = `https://api.w-api.app/v1/message/send-text?instanceId=${instanceId}`;
 
-    const payload = {
-      phone: phoneFormatted,
-      message: `Escolha seu número da sorte e use meu código ${codigo}. Se você ganhar, eu ganho junto!`,
-      delayMessage: 3,
-    };
-
     const headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     };
 
-    const response = await fetch(url, {
+    // Primeira mensagem
+    const firstMessage = {
+      phone: phoneFormatted,
+      message: `Cadastro concluído com sucesso! 🎉\n\nVocê agora faz parte da Loto Jack, uma plataforma divertida onde você pode indicar amigos e participar de experiências premiadas com eles.\n\nAqui está o seu código de indicação: ${codigo}\n\n💬 Ao compartilhar com seus amigos, vocês criam uma rede de participação — e todos se beneficiam juntos.\n\n📲 Copie e envie este link com seu código:\n👉 https://lotojack.netlify.app/\n\nFica tranquilo… é apenas uma plataforma de prêmios, não é spam.`,
+      delayMessage: 3,
+    };
+
+    const firstResponse = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(payload),
+      body: JSON.stringify(firstMessage),
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`Erro na API do WhatsApp: ${errorData.message || response.statusText}`);
+    if (!firstResponse.ok) {
+      const errorData = await firstResponse.json();
+      throw new Error(`Erro na API do WhatsApp: ${errorData.message || firstResponse.statusText}`);
     }
 
-    const result = await response.json();
-    console.log('Mensagem enviada com sucesso:', result);
+    // Segunda mensagem
+    const secondMessage = {
+      phone: phoneFormatted,
+      message: `Ei! Tudo bem? 😄\nQuero te mostrar algo legal que comecei a usar: a Loto Jack — uma plataforma de prêmios onde a gente participa juntos e se indica.\n\nFica tranquilo… não é spam. Só estou compartilhando porque confio em você. 🤝\n\nSe quiser conhecer, é só clicar aqui:\n👉 https://lotojack.netlify.app/\nE usar meu código: ${codigo}\n\nSe curtir, me avisa pra gente participar juntos! ✨`,
+      delayMessage: 5,
+    };
+
+    const secondResponse = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(secondMessage),
+    });
+
+    if (!secondResponse.ok) {
+      const errorData = await secondResponse.json();
+      throw new Error(`Erro na API do WhatsApp: ${errorData.message || secondResponse.statusText}`);
+    }
+
+    const result = await secondResponse.json();
+    console.log('Mensagens enviadas com sucesso:', result);
     return result;
   } catch (err: any) {
-    console.error('Erro ao enviar mensagem:', err.message);
-    throw new Error(`Falha ao enviar mensagem: ${err.message}`);
+    console.error('Erro ao enviar mensagens:', err.message);
+    throw new Error(`Falha ao enviar mensagens: ${err.message}`);
   }
 }
 
