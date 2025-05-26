@@ -119,7 +119,7 @@ export class AuthService {
       } catch (error: any) {
         this.logger.error(`Erro ao enviar mensagem WhatsApp: ${error.message}`);
         // Não vamos lançar o erro aqui para não impedir o cadastro do usuário
-      }
+    }
     } else {
       this.logger.warn('Telefone não fornecido durante o cadastro. Mensagem WhatsApp não será enviada.');
     }
