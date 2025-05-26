@@ -42,7 +42,7 @@ export async function sendMessage(numero: string | number, codigo: string): Prom
     // Primeira mensagem
     const firstMessage = {
       phone: phoneFormatted,
-      message: `Cadastro concluído com sucesso! 🎉\n\nVocê agora faz parte da Loto Jack, uma plataforma divertida onde você pode indicar amigos e participar de experiências premiadas com eles.\n\nAqui está o seu código de indicação: ${codigo}\n\n💬 Ao compartilhar com seus amigos, vocês criam uma rede de participação — e todos se beneficiam juntos.\n\n📲 Copie e envie este link com seu código:\n👉 https://lotojack.netlify.app/\n\nFica tranquilo… é apenas uma plataforma de prêmios, não é spam.`,
+      message: `Cadastro concluído com sucesso! 🎉\n\nVocê agora faz parte da Loto Jack, uma plataforma divertida onde você pode indicar amigos e participar de experiências premiadas com eles.\n\nAqui está o seu código de indicação: ${codigo}\n\n💬 Ao compartilhar com seus amigos, vocês criam uma rede de participação — e todos se beneficiam juntos.\n\n📲 Copie e envie este link com seu código:\n👉 https://lotojack.netlify.app?code/${codigo}\n\nFica tranquilo… é apenas uma plataforma de prêmios, não é spam.`,
       delayMessage: 3,
     };
 
@@ -60,7 +60,7 @@ export async function sendMessage(numero: string | number, codigo: string): Prom
     // Segunda mensagem
     const secondMessage = {
       phone: phoneFormatted,
-      message: `Ei! Tudo bem? 😄\nQuero te mostrar algo legal que comecei a usar: a Loto Jack — uma plataforma de prêmios onde a gente participa juntos e se indica.\n\nFica tranquilo… não é spam. Só estou compartilhando porque confio em você. 🤝\n\nSe quiser conhecer, é só clicar aqui:\n👉 https://lotojack.netlify.app/\nE usar meu código: ${codigo}\n\nSe curtir, me avisa pra gente participar juntos! ✨`,
+      message: `Ei! Tudo bem? 😄\nQuero te mostrar algo legal que comecei a usar: a Loto Jack — uma plataforma de prêmios onde a gente participa juntos e se indica.\n\nFica tranquilo… não é spam. Só estou compartilhando porque confio em você. 🤝\n\nSe quiser conhecer, é só clicar aqui:\n👉 https://lotojack.netlify.app?code/${codigo}\n\nSe curtir, me avisa pra gente participar juntos! ✨`,
       delayMessage: 5,
     };
 
