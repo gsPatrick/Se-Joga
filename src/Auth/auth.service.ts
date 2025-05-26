@@ -22,7 +22,7 @@ import { PokerBet } from 'src/models/poker/poker-bet.model';
 @Injectable()
 export class AuthService {
   private readonly resetPasswordTokens: Map<string, { userId: number; expiry: Date }> = new Map();
-   private readonly logger = new Logger(AuthService.name); // Adicionar logger
+  private readonly logger = new Logger(AuthService.name); // Adicionar logger
 
 
   constructor(
@@ -38,7 +38,7 @@ export class AuthService {
     @InjectModel(Bet) private betModel: typeof Bet,
     @InjectModel(PokerBet) private pokerBetModel: typeof PokerBet,
     //private mailService: MailService // Inject MailService - REMOVED
-  ) {}
+  ) { }
 
   async signUp(userData: Partial<User>): Promise<User> {
     const { name, email, cpf, phone, password, balance, referralCode: referringCode } = userData; // Adiciona balance e referringCode
@@ -60,16 +60,16 @@ export class AuthService {
     // --- Lógica de indicação ---
     let referrerId: number | undefined;
     if (referringCode) {
-        this.logger.debug(`Código de indicação recebido: ${referringCode}`);
-        const referrer = await this.userModel.findOne({ where: { referralCode: referringCode } });
-        if (!referrer) {
-            // Decide se permite o cadastro mesmo com código inválido ou não
-            // Por enquanto, vamos lançar um erro. Mude para um log e ignore se preferir permitir.
-             this.logger.warn(`Código de indicação inválido recebido: ${referringCode}. Cadastro falhou.`);
-            throw new BadRequestException('Código de indicação inválido.');
-        }
-        referrerId = referrer.id;
-        this.logger.log(`Usuário será indicado por User ID: ${referrerId}`);
+      this.logger.debug(`Código de indicação recebido: ${referringCode}`);
+      const referrer = await this.userModel.findOne({ where: { referralCode: referringCode } });
+      if (!referrer) {
+        // Decide se permite o cadastro mesmo com código inválido ou não
+        // Por enquanto, vamos lançar um erro. Mude para um log e ignore se preferir permitir.
+        this.logger.warn(`Código de indicação inválido recebido: ${referringCode}. Cadastro falhou.`);
+        throw new BadRequestException('Código de indicação inválido.');
+      }
+      referrerId = referrer.id;
+      this.logger.log(`Usuário será indicado por User ID: ${referrerId}`);
     }
     // --- Fim Lógica de indicação ---
 
@@ -78,16 +78,16 @@ export class AuthService {
     let newUserReferralCode: string = ''; // <-- Inicializado aqui
     let isCodeUnique = false;
     while (!isCodeUnique) {
-        // Gera um UUID e pega os primeiros 8 caracteres (ou outro formato que prefira)
-        newUserReferralCode = uuidv4().substring(0, 8).toUpperCase();
-         // Verifica se já existe no banco
-        const existingCodeUser = await this.userModel.findOne({ where: { referralCode: newUserReferralCode } });
-        isCodeUnique = !existingCodeUser;
-         if (!isCodeUnique) { // Adiciona log apenas se não for único
-             this.logger.debug(`Código de indicação gerado '${newUserReferralCode}' já existe. Tentando novamente.`);
-         } else {
-             this.logger.debug(`Código de indicação gerado e único: ${newUserReferralCode}`);
-         }
+      // Gera um UUID e pega os primeiros 8 caracteres (ou outro formato que prefira)
+      newUserReferralCode = uuidv4().substring(0, 8).toUpperCase();
+      // Verifica se já existe no banco
+      const existingCodeUser = await this.userModel.findOne({ where: { referralCode: newUserReferralCode } });
+      isCodeUnique = !existingCodeUser;
+      if (!isCodeUnique) { // Adiciona log apenas se não for único
+        this.logger.debug(`Código de indicação gerado '${newUserReferralCode}' já existe. Tentando novamente.`);
+      } else {
+        this.logger.debug(`Código de indicação gerado e único: ${newUserReferralCode}`);
+      }
     }
 
 
@@ -100,11 +100,29 @@ export class AuthService {
       password: hashedPassword,
       role: UserRole.USER, // Define o role como USER
       balance: balance || 0, // Define o balance se fornecido, senão usa 0
-       referralCode: newUserReferralCode, // Atribui o código gerado para o novo usuário
-       referrerId: referrerId, // Atribui o ID do indicador, se houver
+      referralCode: newUserReferralCode, // Atribui o código gerado para o novo usuário
+      referrerId: referrerId, // Atribui o ID do indicador, se houver
     });
-    
-    await sendMessage(phone, newUserReferralCode)
+
+    if (phone) {
+      try {
+        // Converte o telefone para string caso seja número
+        const phoneStr = (phone as string | number)?.toString() || '';
+        // Remove qualquer caractere não numérico
+        const cleanPhone = phoneStr.replace(/\D/g, '');
+
+        if (cleanPhone.length >= 10 && cleanPhone.length <= 11) {
+          await sendMessage(cleanPhone, newUserReferralCode);
+        } else {
+          this.logger.warn(`Telefone inválido fornecido durante o cadastro: ${phone}. Mensagem WhatsApp não será enviada.`);
+        }
+      } catch (error: any) {
+        this.logger.error(`Erro ao enviar mensagem WhatsApp: ${error.message}`);
+        // Não vamos lançar o erro aqui para não impedir o cadastro do usuário
+      }
+    } else {
+      this.logger.warn('Telefone não fornecido durante o cadastro. Mensagem WhatsApp não será enviada.');
+    }
 
     this.logger.log(`Novo usuário criado com ID ${newUser.id}, código de indicação '${newUserReferralCode}' e referrerId ${referrerId}`);
 
@@ -136,32 +154,32 @@ export class AuthService {
 
     if (!user) {
       // Não lançar NotFoundException se estiver em uma transação e o erro puder ser tratado externamente
-       // Se não houver transação, lançamos. Se houver, lançamos um erro genérico para o caller tratar o rollback.
-       if (!transaction) throw new NotFoundException('Usuário não encontrado.');
-       this.logger.warn(`updateUserBalance chamado para userId ${userId} em transação, mas usuário não encontrado.`);
-       // Em um cenário transacional, falhar explicitamente pode ser melhor para garantir o rollback
-       // Lançar um erro que pode ser identificado no catch do caller, mas que não é uma exceção HTTP
-       const error = new Error(`Usuário ${userId} não encontrado durante operação de saldo em transação.`);
-       (error as any).isHandled = true; // Adiciona uma flag para indicar que é um erro esperado dentro da lógica
-       throw error;
+      // Se não houver transação, lançamos. Se houver, lançamos um erro genérico para o caller tratar o rollback.
+      if (!transaction) throw new NotFoundException('Usuário não encontrado.');
+      this.logger.warn(`updateUserBalance chamado para userId ${userId} em transação, mas usuário não encontrado.`);
+      // Em um cenário transacional, falhar explicitamente pode ser melhor para garantir o rollback
+      // Lançar um erro que pode ser identificado no catch do caller, mas que não é uma exceção HTTP
+      const error = new Error(`Usuário ${userId} não encontrado durante operação de saldo em transação.`);
+      (error as any).isHandled = true; // Adiciona uma flag para indicar que é um erro esperado dentro da lógica
+      throw error;
     }
 
     // A validação de saldo insuficiente deve ocorrer antes de chamar esta função com o valor final,
     // mas um check defensivo ainda é bom.
     const newBalance = Number(user.balance) + Number(amount);
     if (newBalance < 0) {
-        this.logger.error(`Saldo insuficiente para userId ${userId}. Tentativa de subtrair ${amount}, saldo atual ${user.balance}`);
-        if (!transaction) throw new BadRequestException('Saldo insuficiente.');
-        // Se estiver em transação, lançar um erro genérico ou específico para que o caller dê rollback
-        const error = new Error('Insufficient balance during transaction');
-        (error as any).isHandled = true; // Adiciona uma flag
-        throw error;
+      this.logger.error(`Saldo insuficiente para userId ${userId}. Tentativa de subtrair ${amount}, saldo atual ${user.balance}`);
+      if (!transaction) throw new BadRequestException('Saldo insuficiente.');
+      // Se estiver em transação, lançar um erro genérico ou específico para que o caller dê rollback
+      const error = new Error('Insufficient balance during transaction');
+      (error as any).isHandled = true; // Adiciona uma flag
+      throw error;
     }
 
     // Usar increment/decrement dentro da transação
-     const updatedUser = amount > 0
-         ? await user.increment('balance', { by: amount, transaction })
-         : await user.decrement('balance', { by: Math.abs(amount), transaction }); // Decrementa com valor absoluto
+    const updatedUser = amount > 0
+      ? await user.increment('balance', { by: amount, transaction })
+      : await user.decrement('balance', { by: Math.abs(amount), transaction }); // Decrementa com valor absoluto
 
 
     // Recarregar o usuário para obter o saldo atualizado
@@ -175,21 +193,21 @@ export class AuthService {
 
   async findAllUsers(): Promise<User[]> {
     return this.userModel.findAll({
-         attributes: { exclude: ['password'] }, // Exclui a senha do retorno
-          include: [
-               { model: User, as: 'referrer', attributes: ['id', 'name'] }, // Inclui o indicador
-               { model: User, as: 'referredUsers', attributes: ['id', 'name'] } // Inclui os indicados (pode ser grande)
-          ]
-      });
+      attributes: { exclude: ['password'] }, // Exclui a senha do retorno
+      include: [
+        { model: User, as: 'referrer', attributes: ['id', 'name'] }, // Inclui o indicador
+        { model: User, as: 'referredUsers', attributes: ['id', 'name'] } // Inclui os indicados (pode ser grande)
+      ]
+    });
   }
 
   async findCurrentUser(userId: number): Promise<User> {
     const user = await this.userModel.findByPk(userId, {
       attributes: { exclude: ['password'] }, // Exclui a senha do retorno
-       include: [
-           { model: User, as: 'referrer', attributes: ['id', 'name'] }, // Inclui o indicador
-           // Não incluir 'referredUsers' aqui para evitar carregar muitos dados no perfil
-       ]
+      include: [
+        { model: User, as: 'referrer', attributes: ['id', 'name'] }, // Inclui o indicador
+        // Não incluir 'referredUsers' aqui para evitar carregar muitos dados no perfil
+      ]
     });
     if (!user) {
       throw new NotFoundException('Usuário não encontrado.');
@@ -205,17 +223,17 @@ export class AuthService {
 
     // Impedir a atualização de senha, balance e referralCode por essa rota
     if (userData.password) {
-        throw new BadRequestException('A senha não pode ser atualizada por esta rota.');
+      throw new BadRequestException('A senha não pode ser atualizada por esta rota.');
     }
     if (userData.balance !== undefined) {
-        throw new BadRequestException('O saldo não pode ser atualizado por esta rota.');
+      throw new BadRequestException('O saldo não pode ser atualizado por esta rota.');
     }
-     if (userData.referralCode !== undefined) {
-         throw new BadRequestException('O código de indicação não pode ser atualizado por esta rota.');
-     }
-      if (userData.referrerId !== undefined) {
-         throw new BadRequestException('O indicador não pode ser atualizado por esta rota.');
-     }
+    if (userData.referralCode !== undefined) {
+      throw new BadRequestException('O código de indicação não pode ser atualizado por esta rota.');
+    }
+    if (userData.referrerId !== undefined) {
+      throw new BadRequestException('O indicador não pode ser atualizado por esta rota.');
+    }
 
 
     await user.update(userData);
@@ -229,27 +247,27 @@ export class AuthService {
     // mas a função interna `updateUserBalance` pode.
     // Para evitar problemas de concorrência se múltiplos pedidos chegarem rápido,
     // é melhor usar a função transacional.
-     // Vamos criar uma nova transação apenas para esta operação, ou refatorar o controller
-     // para usar o updateUserBalance transacional se for parte de uma operação maior.
-     // Por enquanto, manter a lógica simples, mas ciente da limitação de concorrência sem transaction.
-     const user = await this.userModel.findByPk(userId);
-     if (!user) {
-         throw new NotFoundException('Usuário não encontrado.');
-     }
+    // Vamos criar uma nova transação apenas para esta operação, ou refatorar o controller
+    // para usar o updateUserBalance transacional se for parte de uma operação maior.
+    // Por enquanto, manter a lógica simples, mas ciente da limitação de concorrência sem transaction.
+    const user = await this.userModel.findByPk(userId);
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
 
-     const newBalance = Number(user.balance) + Number(amount);
+    const newBalance = Number(user.balance) + Number(amount);
 
-     if (newBalance < 0) {
-         throw new BadRequestException('Saldo insuficiente.');
-     }
+    if (newBalance < 0) {
+      throw new BadRequestException('Saldo insuficiente.');
+    }
 
-     user.balance = newBalance;
-     await user.save(); // save() também pode ter problemas de concorrência se não for transacional
+    user.balance = newBalance;
+    await user.save(); // save() também pode ter problemas de concorrência se não for transacional
 
-     // Alternativa mais robusta (exigiria refatoração ou nova transação):
-     // return this.updateUserBalance(userId, amount); // Chamaria a versão interna com nova transação
+    // Alternativa mais robusta (exigiria refatoração ou nova transação):
+    // return this.updateUserBalance(userId, amount); // Chamaria a versão interna com nova transação
 
-     return user; // Retorna o usuário atualizado (pode não ter o saldo mais fresco em alta concorrência)
+    return user; // Retorna o usuário atualizado (pode não ter o saldo mais fresco em alta concorrência)
   }
 
 
@@ -312,153 +330,153 @@ export class AuthService {
   // --- Métodos para o sistema de indicação ---
 
   async findUserByReferralCode(referralCode: string): Promise<User | null> {
-       if (!referralCode) return null;
-       this.logger.debug(`Buscando usuário pelo código de indicação: ${referralCode}`);
-       const user = await this.userModel.findOne({ where: { referralCode } });
-       if (user) {
-           this.logger.debug(`Usuário encontrado para o código ${referralCode}: ID ${user.id}`);
-       } else {
-           this.logger.debug(`Nenhum usuário encontrado para o código ${referralCode}.`);
-       }
-       return user;
-   }
+    if (!referralCode) return null;
+    this.logger.debug(`Buscando usuário pelo código de indicação: ${referralCode}`);
+    const user = await this.userModel.findOne({ where: { referralCode } });
+    if (user) {
+      this.logger.debug(`Usuário encontrado para o código ${referralCode}: ID ${user.id}`);
+    } else {
+      this.logger.debug(`Nenhum usuário encontrado para o código ${referralCode}.`);
+    }
+    return user;
+  }
 
   async getReferralData(userId: number): Promise<any> {
-      const user = await this.userModel.findByPk(userId, {
-          attributes: ['id', 'name', 'referralCode'], // Dados básicos do usuário + código
-           // Incluir os usuários indicados
-          include: [
-              {
-                  model: User,
-                  as: 'referredUsers',
-                  attributes: ['id', 'name', 'createdAt'], // Dados básicos dos indicados
-                  order: [['createdAt', 'ASC']] // Ordenar indicados pela data de cadastro
-              }
-          ]
-      });
-
-      if (!user) {
-          throw new NotFoundException('Usuário não encontrado.');
-      }
-
-      return {
-          userId: user.id,
-          name: user.name,
-          referralCode: user.referralCode, // Código de indicação DESTE usuário
-          referredUsers: user.referredUsers?.map(referred => ({ // Lista de usuários indicados POR ESTE usuário
-              id: referred.id,
-              name: referred.name,
-              signUpDate: referred.createdAt,
-          })) || [],
-           // Futuramente, pode adicionar resumo de comissões ganhas, etc.
-      };
-   }
-
-   async findReferrerById(userId: number, transaction?: Transaction): Promise<User | null> {
-        // Encontra o usuário e inclui o indicador se houver
-       const user = await this.userModel.findByPk(userId, {
-           attributes: ['id'], // Só precisamos do ID para verificar a existência e o referrerId
-           include: [{ model: User, as: 'referrer', attributes: ['id'] }], // Inclui apenas o ID do indicador
-           transaction
-       });
-
-       if (!user || !user.referrer) {
-           return null; // Usuário não encontrado ou não tem indicador
-       }
-
-       // Retorna o objeto completo do indicador
-        // Buscar o indicador usando o ID do user.referrer.id e a mesma transação
-        const referrer = await this.userModel.findByPk(user.referrer.id, { transaction });
-        return referrer || null; // Retorna o indicador ou null se não encontrar (improvável se user.referrer existe)
-   }
-
-    // --- NOVO MÉTODO: Verificar se o usuário jogou no mês atual ---
-    async hasPlayedThisMonth(userId: number, transaction?: Transaction): Promise<boolean> {
-        if (!userId) {
-            this.logger.warn(`hasPlayedThisMonth chamado com userId nulo/inválido.`);
-            return false; // Usuário inválido não jogou
+    const user = await this.userModel.findByPk(userId, {
+      attributes: ['id', 'name', 'referralCode'], // Dados básicos do usuário + código
+      // Incluir os usuários indicados
+      include: [
+        {
+          model: User,
+          as: 'referredUsers',
+          attributes: ['id', 'name', 'createdAt'], // Dados básicos dos indicados
+          order: [['createdAt', 'ASC']] // Ordenar indicados pela data de cadastro
         }
+      ]
+    });
 
-        const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1); // Primeiro dia do mês atual
-
-        this.logger.debug(`Verificando atividade de jogo para o usuário ${userId} desde ${startOfMonth.toISOString()}`);
-
-        // Consultar cada modelo de jogo. Podemos parar assim que encontrar uma atividade.
-        const rafflePlayed = await this.raffleTicketModel.findOne({
-            where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
-            transaction,
-            attributes: ['id'], // Buscar apenas ID para otimização
-        });
-        if (rafflePlayed) {
-            this.logger.debug(`Usuário ${userId} jogou Rifa este mês.`);
-            return true;
-        }
-
-         const roulettePlayed = await this.rouletteBetModel.findOne({
-            where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
-            transaction,
-            attributes: ['id'],
-         });
-         if (roulettePlayed) {
-            this.logger.debug(`Usuário ${userId} jogou Roleta este mês.`);
-            return true;
-         }
-
-         const slotMachinePlayed = await this.slotMachineBetModel.findOne({
-             where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
-             transaction,
-             attributes: ['id'],
-         });
-         if (slotMachinePlayed) {
-             this.logger.debug(`Usuário ${userId} jogou Caca Niquel este mês.`);
-             return true;
-         }
-
-         const bingoPlayed = await this.bingoCardModel.findOne({
-             where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
-             transaction,
-             attributes: ['id'],
-         });
-         if (bingoPlayed) {
-             this.logger.debug(`Usuário ${userId} jogou Bingo este mês.`);
-             return true;
-         }
-
-         const dicePlayed = await this.diceBetModel.findOne({
-             where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
-             transaction,
-             attributes: ['id'],
-         });
-         if (dicePlayed) {
-             this.logger.debug(`Usuário ${userId} jogou Dados este mês.`);
-             return true;
-         }
-
-         const betGamePlayed = await this.betModel.findOne({
-              where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
-              transaction,
-              attributes: ['id'],
-          });
-          if (betGamePlayed) {
-              this.logger.debug(`Usuário ${userId} jogou BetGame (Crash, etc.) este mês.`);
-              return true;
-          }
-
-          const pokerPlayed = await this.pokerBetModel.findOne({
-              where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
-              transaction,
-              attributes: ['id'],
-          });
-          if (pokerPlayed) {
-              this.logger.debug(`Usuário ${userId} jogou Poker este mês.`);
-              return true;
-          }
-
-
-        this.logger.debug(`Usuário ${userId} NÃO jogou nenhum jogo este mês.`);
-        return false; // Nenhuma atividade encontrada neste mês
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
     }
+
+    return {
+      userId: user.id,
+      name: user.name,
+      referralCode: user.referralCode, // Código de indicação DESTE usuário
+      referredUsers: user.referredUsers?.map(referred => ({ // Lista de usuários indicados POR ESTE usuário
+        id: referred.id,
+        name: referred.name,
+        signUpDate: referred.createdAt,
+      })) || [],
+      // Futuramente, pode adicionar resumo de comissões ganhas, etc.
+    };
+  }
+
+  async findReferrerById(userId: number, transaction?: Transaction): Promise<User | null> {
+    // Encontra o usuário e inclui o indicador se houver
+    const user = await this.userModel.findByPk(userId, {
+      attributes: ['id'], // Só precisamos do ID para verificar a existência e o referrerId
+      include: [{ model: User, as: 'referrer', attributes: ['id'] }], // Inclui apenas o ID do indicador
+      transaction
+    });
+
+    if (!user || !user.referrer) {
+      return null; // Usuário não encontrado ou não tem indicador
+    }
+
+    // Retorna o objeto completo do indicador
+    // Buscar o indicador usando o ID do user.referrer.id e a mesma transação
+    const referrer = await this.userModel.findByPk(user.referrer.id, { transaction });
+    return referrer || null; // Retorna o indicador ou null se não encontrar (improvável se user.referrer existe)
+  }
+
+  // --- NOVO MÉTODO: Verificar se o usuário jogou no mês atual ---
+  async hasPlayedThisMonth(userId: number, transaction?: Transaction): Promise<boolean> {
+    if (!userId) {
+      this.logger.warn(`hasPlayedThisMonth chamado com userId nulo/inválido.`);
+      return false; // Usuário inválido não jogou
+    }
+
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1); // Primeiro dia do mês atual
+
+    this.logger.debug(`Verificando atividade de jogo para o usuário ${userId} desde ${startOfMonth.toISOString()}`);
+
+    // Consultar cada modelo de jogo. Podemos parar assim que encontrar uma atividade.
+    const rafflePlayed = await this.raffleTicketModel.findOne({
+      where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
+      transaction,
+      attributes: ['id'], // Buscar apenas ID para otimização
+    });
+    if (rafflePlayed) {
+      this.logger.debug(`Usuário ${userId} jogou Rifa este mês.`);
+      return true;
+    }
+
+    const roulettePlayed = await this.rouletteBetModel.findOne({
+      where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
+      transaction,
+      attributes: ['id'],
+    });
+    if (roulettePlayed) {
+      this.logger.debug(`Usuário ${userId} jogou Roleta este mês.`);
+      return true;
+    }
+
+    const slotMachinePlayed = await this.slotMachineBetModel.findOne({
+      where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
+      transaction,
+      attributes: ['id'],
+    });
+    if (slotMachinePlayed) {
+      this.logger.debug(`Usuário ${userId} jogou Caca Niquel este mês.`);
+      return true;
+    }
+
+    const bingoPlayed = await this.bingoCardModel.findOne({
+      where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
+      transaction,
+      attributes: ['id'],
+    });
+    if (bingoPlayed) {
+      this.logger.debug(`Usuário ${userId} jogou Bingo este mês.`);
+      return true;
+    }
+
+    const dicePlayed = await this.diceBetModel.findOne({
+      where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
+      transaction,
+      attributes: ['id'],
+    });
+    if (dicePlayed) {
+      this.logger.debug(`Usuário ${userId} jogou Dados este mês.`);
+      return true;
+    }
+
+    const betGamePlayed = await this.betModel.findOne({
+      where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
+      transaction,
+      attributes: ['id'],
+    });
+    if (betGamePlayed) {
+      this.logger.debug(`Usuário ${userId} jogou BetGame (Crash, etc.) este mês.`);
+      return true;
+    }
+
+    const pokerPlayed = await this.pokerBetModel.findOne({
+      where: { userId: userId, createdAt: { [Op.gte]: startOfMonth } },
+      transaction,
+      attributes: ['id'],
+    });
+    if (pokerPlayed) {
+      this.logger.debug(`Usuário ${userId} jogou Poker este mês.`);
+      return true;
+    }
+
+
+    this.logger.debug(`Usuário ${userId} NÃO jogou nenhum jogo este mês.`);
+    return false; // Nenhuma atividade encontrada neste mês
+  }
 
   // --- Fim dos métodos de indicação ---
 }

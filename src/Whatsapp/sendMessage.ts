@@ -1,15 +1,24 @@
 import { config } from 'dotenv';
 config();
 
-function formatPhoneNumber(phone: string): string {
-  const numbers = phone.replace(/\D/g, '');
+function formatPhoneNumber(phone: string | number): string {
+  if (!phone) {
+    throw new Error('Número de telefone não pode ser vazio');
+  }
+  // Converte para string caso seja número
+  const phoneStr = phone.toString();
+  const numbers = phoneStr.replace(/\D/g, '');
   if (!numbers.startsWith('55')) {
     return `55${numbers}`;
   }
   return numbers;
 }
- 
-export async function sendMessage(numero: string, codigo: string): Promise<any> {
+
+export async function sendMessage(numero: string | number, codigo: string): Promise<any> {
+  if (!numero || !codigo) {
+    throw new Error('Número de telefone e código são obrigatórios');
+  }
+
   const instanceId = process.env.INSTANCE_ID;
   const apiKey = process.env.API_KEY;
 
@@ -17,25 +26,25 @@ export async function sendMessage(numero: string, codigo: string): Promise<any> 
     throw new Error('INSTANCE_ID ou API_KEY não configurados nas variáveis de ambiente.');
   }
 
-  const phoneFormatted = formatPhoneNumber(numero);
-  if (phoneFormatted.length < 12 || phoneFormatted.length > 13) {
-    throw new Error('Número de telefone inválido. Use o formato: DDD + número');
-  }
-
-  const url = `https://api.w-api.app/v1/message/send-text?instanceId=${instanceId}`;
-
-  const payload = {
-    phone: phoneFormatted,
-    message: `Escolha seu número da sorte e use meu código ${codigo}. Se você ganhar, eu ganho junto!`,
-    delayMessage: 3,
-  };
-
-  const headers = {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${apiKey}`,
-  };
-
   try {
+    const phoneFormatted = formatPhoneNumber(numero);
+    if (phoneFormatted.length < 12 || phoneFormatted.length > 13) {
+      throw new Error('Número de telefone inválido. Use o formato: DDD + número');
+    }
+
+    const url = `https://api.w-api.app/v1/message/send-text?instanceId=${instanceId}`;
+
+    const payload = {
+      phone: phoneFormatted,
+      message: `Escolha seu número da sorte e use meu código ${codigo}. Se você ganhar, eu ganho junto!`,
+      delayMessage: 3,
+    };
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    };
+
     const response = await fetch(url, {
       method: 'POST',
       headers,
@@ -56,7 +65,11 @@ export async function sendMessage(numero: string, codigo: string): Promise<any> 
   }
 }
 
-export async function sendMessageMass(numbers: string[], hour: string): Promise<void> {
+export async function sendMessageMass(numbers: (string | number)[], hour: string): Promise<void> {
+  if (!numbers || !numbers.length || !hour) {
+    throw new Error('Lista de números e horário são obrigatórios');
+  }
+
   const instanceId = process.env.INSTANCE_ID;
   const apiKey = process.env.API_KEY;
 
