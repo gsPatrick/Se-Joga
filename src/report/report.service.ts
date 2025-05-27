@@ -1,11 +1,11 @@
 // src/report/report.service.ts
-import { Injectable, Logger, Inject } from '@nestjs/common';
+import { Injectable, Logger, Inject, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Sequelize, Op, literal } from 'sequelize';
 import { Raffle } from '../models/raffle/raffle.model';
 import { RaffleTicket } from '../models/raffle/raffle-ticket.model';
 import { User } from '../models/user/user.model';
-import { AuthService } from 'src/Auth/auth.service'; // Importar AuthService
+import { AuthService } from 'src/Auth/auth.service';
 
 @Injectable()
 export class ReportService {
@@ -15,15 +15,53 @@ export class ReportService {
     @InjectModel(Raffle) private raffleModel: typeof Raffle,
     @InjectModel(RaffleTicket) private raffleTicketModel: typeof RaffleTicket,
     @InjectModel(User) private userModel: typeof User,
-    private authService: AuthService, // Injete AuthService
-    // @Inject('SEQUELIZE') private sequelize: Sequelize, // Não é necessário injetar a instância aqui para estas queries
+    private authService: AuthService,
+    // @Inject('SEQUELIZE') private sequelize: Sequelize,
   ) {}
 
+  // Método auxiliar para criar o filtro de data
+  private createDateFilter(startDate?: string, endDate?: string): any {
+      const dateFilter: any = {};
+      let parsedStartDate: Date | undefined;
+      let parsedEndDate: Date | undefined;
+
+      if (startDate) {
+          parsedStartDate = new Date(startDate);
+          if (isNaN(parsedStartDate.getTime())) {
+              throw new BadRequestException('Formato de data de início inválido.');
+          }
+          // Para incluir o dia de início inteiro, defina o horário para o início do dia
+          parsedStartDate.setHours(0, 0, 0, 0); // Garantir início do dia
+          dateFilter[Op.gte] = parsedStartDate;
+      }
+
+      if (endDate) {
+          parsedEndDate = new Date(endDate);
+          if (isNaN(parsedEndDate.getTime())) {
+              throw new BadRequestException('Formato de data de fim inválido.');
+          }
+           // Para incluir o dia de fim inteiro, defina o horário para o fim do dia
+          parsedEndDate.setHours(23, 59, 59, 999); // Garantir fim do dia
+          dateFilter[Op.lte] = parsedEndDate;
+      }
+
+      // Retorna o objeto filtro. Se ambas as datas forem omitidas, o objeto estará vazio.
+      // Se apenas uma for fornecida, terá apenas Op.gte ou Op.lte.
+      return dateFilter;
+  }
+
+
   // 1. Total de rifa vendidas por valor dia ( 5/10/20/30/50/100)
-  async getTotalSoldByPriceAndDay(): Promise<any[]> {
-    this.logger.log('Gerando relatório: Total de rifas vendidas por valor e dia...');
-    // Note: ticketPrice está na tabela Raffle, precisamos do join.
+  // Filtra pela data de criação do TICKET (RaffleTicket.createdAt)
+  async getTotalSoldByPriceAndDay(startDate?: string, endDate?: string): Promise<any[]> {
+    this.logger.log(`Gerando relatório: Total de rifas vendidas por valor e dia (Datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'})...`);
+
+    const dateFilter = this.createDateFilter(startDate, endDate);
+
+    const whereCondition = Object.keys(dateFilter).length > 0 ? { createdAt: dateFilter } : {};
+
     const results = await this.raffleTicketModel.findAll({
+      where: whereCondition, // Use a condição where corretamente estruturada
       include: [
         {
           model: Raffle,
@@ -40,14 +78,17 @@ export class ReportService {
        // Agrupa por dia da compra e preço do bilhete
       group: [
           Sequelize.fn('date_trunc', 'day', Sequelize.col('RaffleTicket.createdAt')),
-          Sequelize.col('Raffle.ticketPrice'),
+          // *** CORREÇÃO AQUI: Usar o alias correto 'raffle' (minúsculo) ***
+          Sequelize.col('raffle.ticketPrice'),
       ],
       // Esta é a declaração correta dos atributos com agregação e aliases
       attributes: [
           [Sequelize.fn('date_trunc', 'day', Sequelize.col('RaffleTicket.createdAt')), 'purchaseDay'],
-          [Sequelize.col('Raffle.ticketPrice'), 'ticketPrice'],
+          // *** CORREÇÃO AQUI: Usar o alias correto 'raffle' (minúsculo) ***
+          [Sequelize.col('raffle.ticketPrice'), 'ticketPrice'],
           [Sequelize.fn('count', Sequelize.col('RaffleTicket.id')), 'totalSoldTickets'], // Conta os IDs dos tickets para precisão
-          [Sequelize.fn('sum', literal('"Raffle"."ticketPrice"')), 'totalRevenue'], // Soma os preços dos tickets associados
+          // *** CORREÇÃO AQUI: Usar o alias correto 'raffle' (minúsculo) no literal ***
+          [Sequelize.fn('sum', literal('"raffle"."ticketPrice"')), 'totalRevenue'],
       ],
       order: [
         [Sequelize.literal('"purchaseDay"'), 'ASC'], // Ordena por dia
@@ -89,14 +130,21 @@ export class ReportService {
 
 
   // 2. Receita bruta
-  async getTotalGrossRevenue(): Promise<number> {
-    this.logger.log('Calculando: Receita Bruta Total...');
-    // Receita bruta é o total arrecadado com a venda de TODOS os bilhetes, em TODAS as rifas.
+  // Filtra pela data de criação do TICKET (RaffleTicket.createdAt)
+  async getTotalGrossRevenue(startDate?: string, endDate?: string): Promise<number> {
+    this.logger.log(`Calculando: Receita Bruta Total (Datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'})...`);
+
+    const dateFilter = this.createDateFilter(startDate, endDate);
+
+    const whereCondition = Object.keys(dateFilter).length > 0 ? { createdAt: dateFilter } : {};
+
+    // Receita bruta é o total arrecadado com a venda de TODOS os bilhetes.
     // Cada bilhete vendido contribui com o ticketPrice da sua rifa.
     const result = await this.raffleTicketModel.findAll({
+       where: whereCondition, // Use a condição where corretamente estruturada
        attributes: [
-         // Usar literal para referenciar a coluna na tabela associada dentro do SUM
-         [Sequelize.fn('sum', literal('"Raffle"."ticketPrice"')), 'totalGrossRevenue'],
+         // *** CORREÇÃO AQUI: Usar o alias correto 'raffle' (minúsculo) no literal ***
+         [Sequelize.fn('sum', literal('"raffle"."ticketPrice"')), 'totalGrossRevenue'],
        ],
        include: [{
            model: Raffle,
@@ -106,7 +154,6 @@ export class ReportService {
        raw: true, // <-- Returns plain objects
     });
 
-    // Corrigido: Acessar a propriedade usando notação de colchetes ou cast 'any'
     // totalGrossRevenue virá como string do DB para DECIMAL, então parseFloat é necessário
     const totalGrossRevenue = parseFloat((result[0] as any)?.totalGrossRevenue || 0);
     this.logger.log(`Receita Bruta Total calculada: R$ ${totalGrossRevenue.toFixed(2)}`);
@@ -114,14 +161,26 @@ export class ReportService {
   }
 
   // 3. Receita líquida (simplificada)
-  async getTotalNetRevenueSimplified(): Promise<number> {
-    this.logger.log('Calculando: Receita Líquida Total (Simplificada)...');
-    // Receita líquida simplificada = Soma da parcela da casa (15% tradicional, 20% equipes) das rifas FINALIZADAS.
-    // Isso ignora a complexidade exata da comissão de 5% para indicadores ativos.
+  // Filtra pela data de sorteio/fim da RIFA (Raffle.drawDate)
+  async getTotalNetRevenueSimplified(startDate?: string, endDate?: string): Promise<number> {
+    this.logger.log(`Calculando: Receita Líquida Total (Simplificada) (Datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'})...`);
 
+    const dateFilter = this.createDateFilter(startDate, endDate);
+
+    // O filtro já estava aninhado corretamente sob 'drawDate' aqui
+    const whereCondition: any = {
+        finished: true,
+    };
+    if (Object.keys(dateFilter).length > 0) {
+         whereCondition.drawDate = dateFilter;
+    }
+
+
+    // Receita líquida simplificada = Soma da parcela da casa (15% tradicional, 20% equipes) das rifas FINALIZADAS
+    // DENTRO DO PERÍODO DE FILTRO (considerando drawDate).
     const finishedRaffles = await this.raffleModel.findAll({
-        where: { finished: true },
-        attributes: ['id', 'type', 'ticketPrice', 'soldTickets'],
+        where: whereCondition, // Use a condição where corretamente estruturada
+        attributes: ['id', 'type', 'ticketPrice', 'soldTickets', 'drawDate'],
         raw: true, // Obter resultados simples
     });
 
@@ -134,33 +193,56 @@ export class ReportService {
         totalNetRevenue += collectedValue * houseSharePercentage;
     });
 
-    this.logger.log(`Receita Líquida Total (Simplificada) calculada: R$ ${totalNetRevenue.toFixed(2)} (baseado em rifas finalizadas e percentuais fixos da casa).`);
+    this.logger.log(`Receita Líquida Total (Simplificada) calculada: R$ ${totalNetRevenue.toFixed(2)} (baseado em rifas finalizadas no período e percentuais fixos da casa).`);
     return totalNetRevenue;
   }
 
 
   // 4. Rifas fechadas (numeradas)
-  async getFinishedRafflesCount(): Promise<number> {
-    this.logger.log('Contando: Rifas Fechadas...');
-    const count = await this.raffleModel.count({ where: { finished: true } });
-    this.logger.log(`Total de Rifas Fechadas: ${count}`);
+  // Filtra pela data de sorteio/fim da RIFA (Raffle.drawDate)
+  async getFinishedRafflesCount(startDate?: string, endDate?: string): Promise<number> {
+    this.logger.log(`Contando: Rifas Fechadas (Datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'})...`);
+
+    const dateFilter = this.createDateFilter(startDate, endDate);
+
+    // O filtro já estava aninhado corretamente sob 'drawDate' aqui
+    const whereCondition: any = {
+        finished: true,
+    };
+     if (Object.keys(dateFilter).length > 0) {
+        whereCondition.drawDate = dateFilter;
+    }
+
+
+    const count = await this.raffleModel.count({
+        where: whereCondition, // Use a condição where corretamente estruturada
+    });
+    this.logger.log(`Total de Rifas Fechadas no período: ${count}`);
     return count;
   }
 
   // 5. Rifas em aberto (numeradas - quantos números faltam pra fechar)
-  async getOpenRafflesSummary(): Promise<any[]> {
-    this.logger.log('Gerando resumo: Rifas em Aberto...');
+  // Filtra pela data de início da RIFA (Raffle.startDate)
+  async getOpenRafflesSummary(startDate?: string, endDate?: string): Promise<any[]> {
+    this.logger.log(`Gerando resumo: Rifas em Aberto (Datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'})...`);
+
+     const dateFilter = this.createDateFilter(startDate, endDate);
+
+     const whereCondition: any = {
+        finished: false,
+    };
+     if (Object.keys(dateFilter).length > 0) {
+        whereCondition.startDate = dateFilter;
+    }
+
     const openRaffles = await this.raffleModel.findAll({
-      where: { finished: false },
-      attributes: ['id', 'raffleIdentifier', 'type', 'ticketPrice', 'totalTickets', 'soldTickets', 'endDate'],
-       // Nao precisa incluir tickets aqui, soldTickets já é mantido
-       order: [['endDate', 'ASC'], ['createdAt', 'ASC']], // Ordenar por data de fim e criação
-      raw: true, // Obter resultados simples
+      where: whereCondition, // Use a condição where corretamente estruturada
+      attributes: ['id', 'raffleIdentifier', 'type', 'ticketPrice', 'totalTickets', 'soldTickets', 'startDate', 'endDate'],
+       order: [['endDate', 'ASC'], ['createdAt', 'ASC']],
+      raw: true,
     });
 
-    const summary = openRaffles.map((raffle: any) => { // <-- Adicionado ': any' aqui!
-        // ticketPrice, totalTickets, soldTickets vêm como strings quando raw: true é usado
-        // Agora o cast direto para string não dará erro porque raffle é 'any'
+    const summary = openRaffles.map((raffle: any) => {
         const ticketPrice = parseFloat(raffle.ticketPrice as string);
         const totalTickets = parseInt(raffle.totalTickets as string, 10);
         const soldTickets = parseInt(raffle.soldTickets as string, 10);
@@ -172,8 +254,9 @@ export class ReportService {
             ticketPrice: ticketPrice,
             totalTickets: totalTickets,
             soldTickets: soldTickets,
-            remainingTickets: totalTickets - soldTickets, // Calcular a diferença
-            endDate: raffle.endDate, // Datas geralmente vêm como Date objects ou strings parseáveis
+            remainingTickets: totalTickets - soldTickets,
+             startDate: raffle.startDate,
+            endDate: raffle.endDate,
         };
     });
 
@@ -183,32 +266,34 @@ export class ReportService {
   }
 
   // 6. Comparativo loto Jack X loto seleções valor total de venda.
-  async getSalesComparisonByType(): Promise<{ tradicional: number; equipes: number }> {
-    this.logger.log('Gerando relatório: Comparativo de Vendas por Tipo de Rifa...');
-     // Similar à receita bruta, mas agrupado por tipo
+  // Filtra pela data de criação do TICKET (RaffleTicket.createdAt)
+  async getSalesComparisonByType(startDate?: string, endDate?: string): Promise<{ tradicional: number; equipes: number }> {
+    this.logger.log(`Gerando relatório: Comparativo de Vendas por Tipo de Rifa (Datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'})...`);
+
+     const dateFilter = this.createDateFilter(startDate, endDate);
+
+    const whereCondition = Object.keys(dateFilter).length > 0 ? { createdAt: dateFilter } : {};
+
     const results = await this.raffleTicketModel.findAll({
+        where: whereCondition, // Use a condição where corretamente estruturada
         attributes: [
-            [Sequelize.col('Raffle.type'), 'raffleType'],
-            // Usar literal para referenciar a coluna na tabela associada dentro do SUM
-            [Sequelize.fn('sum', literal('"Raffle"."ticketPrice"')), 'totalValue'],
+            // *** CORREÇÃO AQUI: Usar o alias correto 'raffle' (minúsculo) ***
+            [Sequelize.col('raffle.type'), 'raffleType'],
+            // *** CORREÇÃO AQUI: Usar o alias correto 'raffle' (minúsculo) no literal ***
+            [Sequelize.fn('sum', literal('"raffle"."ticketPrice"')), 'totalValue'],
         ],
         include: [{
             model: Raffle,
             attributes: [],
             required: true,
-            where: {
-                 // Opcional: filtrar por status finished? A receita bruta geralmente inclui tudo que foi vendido.
-                 // Vamos incluir tudo vendido, independente de ter finalizado ou não.
-            }
         }],
-        group: ['Raffle.type'],
+        group: ['raffle.type'], // *** CORREÇÃO AQUI: Usar o alias correto 'raffle' (minúsculo) ***
         raw: true,
     });
 
     const comparison = { tradicional: 0, equipes: 0 };
 
-    results.forEach((row: any) => { // Mantido 'any' aqui
-        // totalValue virá como string do DB para DECIMAL, então parseFloat é necessário
+    results.forEach((row: any) => {
         if (row.raffleType === 'tradicional') {
             comparison.tradicional = parseFloat(row.totalValue || 0);
         } else if (row.raffleType === 'equipes') {
@@ -221,26 +306,45 @@ export class ReportService {
   }
 
   // 7. Quantidade jogadores cadastrados.
-  async getTotalRegisteredUsers(): Promise<number> {
-    this.logger.log('Contando: Total de Usuários Cadastrados...');
-    const count = await this.userModel.count();
-    this.logger.log(`Total de Usuários Cadastrados: ${count}`);
+  // Filtra pela data de criação do USUÁRIO (User.createdAt)
+  async getTotalRegisteredUsers(startDate?: string, endDate?: string): Promise<number> {
+    this.logger.log(`Contando: Total de Usuários Cadastrados (Datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'})...`);
+
+    const dateFilter = this.createDateFilter(startDate, endDate);
+
+    // *** CORREÇÃO: Aninhar dateFilter sob 'createdAt' ***
+    const whereCondition = Object.keys(dateFilter).length > 0 ? { createdAt: dateFilter } : {};
+
+    const count = await this.userModel.count({
+        where: whereCondition, // Use a condição where corretamente estruturada
+    });
+    this.logger.log(`Total de Usuários Cadastrados no período: ${count}`);
     return count;
   }
 
   // 8. Lista de jogadores indicados por cadastro.
-  async getReferralCounts(): Promise<any[]> {
-    this.logger.log('Gerando relatório: Jogadores Indicados por Indicador...');
-     // Buscar todos os usuários que INDICARAM alguém
-     // Mantendo a versão que busca a lista para ter todos os detalhes solicitados (id, name, signUpDate dos indicados).
+  // Filtra pela data de criação do USUÁRIO INDICADO (referredUsers.createdAt)
+  async getReferralCounts(startDate?: string, endDate?: string): Promise<any[]> {
+    this.logger.log(`Gerando relatório: Jogadores Indicados por Indicador (Datas de indicação: ${startDate || 'qualquer'} a ${endDate || 'qualquer'})...`);
+
+    const dateFilter = this.createDateFilter(startDate, endDate);
+
+     // O filtro é aplicado à coluna 'createdAt' do modelo incluído 'referredUsers', o que está correto.
+     // Não é necessário envolver dateFilter em um objeto adicional aqui.
+     const referredUsersIncludeWhere = Object.keys(dateFilter).length > 0 ? { where: dateFilter } : {};
+
+     // *** CORREÇÃO: Removido o Sequelize.literal da cláusula where principal. ***
+     // *** Filtrar os referrers que tiveram indicados no período será feito após a query. ***
     const referrersWithReferred = await this.userModel.findAll({
-        where: Sequelize.literal('EXISTS (SELECT 1 FROM users "referredUsers" WHERE "referredUsers"."referrerId" = "User"."id")'),
+        // where: Sequelize.literal('EXISTS (SELECT 1 FROM users "referredUsers" WHERE "referredUsers"."referrerId" = "User"."id")'), // REMOVIDO
         attributes: ['id', 'name', 'referralCode', 'createdAt'],
         include: [
             {
                 model: User,
                 as: 'referredUsers',
                 attributes: ['id', 'name', 'createdAt'],
+                 ...referredUsersIncludeWhere, // Aplica a cláusula where condicional (já é { createdAt: dateFilter } se dateFilter não estiver vazio)
+                 required: false, // Manter required: false para retornar todos os referrers inicialmente
                  order: [['createdAt', 'ASC']]
             }
         ],
@@ -248,49 +352,80 @@ export class ReportService {
     });
 
 
-    const referralList = referrersWithReferred.map(referrer => ({
-        referrerId: referrer.id,
-        referrerName: referrer.name,
-        referrerCode: referrer.referralCode,
-        referredCount: referrer.referredUsers?.length || 0,
-        referredUsers: referrer.referredUsers?.map(referred => ({
-             id: referred.id,
-             name: referred.name,
-             signUpDate: referred.createdAt,
-        })) || []
-    }));
+    const referralList = referrersWithReferred
+        // *** CORREÇÃO: Filtrar *após* a query para incluir apenas referrers que têm pelo menos um indicado (no período de filtro, se aplicado) ***
+        // Se dateFilter estiver vazio, queremos todos os referrers que têm QUALQUER indicado.
+        // Se dateFilter NÃO estiver vazio, queremos apenas referrers que têm pelo menos UM indicado CUJA DATA DE CRIAÇÃO ESTÁ NO PERÍODO.
+        .filter(referrer => (Object.keys(dateFilter).length === 0 && referrer.referredUsers && referrer.referredUsers.length > 0) || // Sem filtro, tem q ter qualquer indicado
+                           (Object.keys(dateFilter).length > 0 && referrer.referredUsers && referrer.referredUsers.length > 0) // Com filtro, tem que ter indicado NO PERÍODO
+        )
+        .map(referrer => ({
+            referrerId: referrer.id,
+            referrerName: referrer.name,
+            referrerCode: referrer.referralCode,
+            referredCount: referrer.referredUsers?.length || 0, // Contagem APENAS dos indicados no período (ou todos se sem filtro)
+            referredUsers: referrer.referredUsers?.map(referred => ({
+                 id: referred.id,
+                 name: referred.name,
+                 signUpDate: referred.createdAt,
+            })) || []
+        }));
 
-    this.logger.log(`Relatório de Indicações gerado. ${referralList.length} usuários com pelo menos um indicado encontrados.`);
+    this.logger.log(`Relatório de Indicações gerado. ${referralList.length} usuários com pelo menos um indicado (no período de filtro, se aplicado) encontrados.`);
     return referralList;
   }
 
   // 9. Lista de jogadores que enviaram código mas não estão aptos a receber os 5%
-  async getInactiveReferrersThisMonth(): Promise<any[]> {
-    this.logger.log('Gerando relatório: Indicadores Inativos neste Mês...');
+  // Filtra pela data de criação do USUÁRIO INDICADO (referredUsers.createdAt) - similar ao item 8
+  async getInactiveReferrersThisMonth(startDate?: string, endDate?: string): Promise<any[]> {
+    this.logger.log(`Gerando relatório: Indicadores Inativos neste Mês (Filtrando indicados criados entre ${startDate || 'qualquer'} a ${endDate || 'qualquer'})...`);
 
-     // Buscar todos os usuários que INDICARAM alguém
+     const dateFilter = this.createDateFilter(startDate, endDate);
+
+     // O filtro é aplicado à coluna 'createdAt' do modelo incluído 'referredUsers'.
+     // Required: true significa que só pegamos referrers que TIVERAM indicados *que matcham a condição do where do include*.
+     // Se dateFilter está vazio, required: true significa que só pegamos referrers que tiveram QUALQUER indicado.
+     // Se dateFilter NÃO está vazio, required: true significa que só pegamos referrers que tiveram pelo menos UM indicado CUJA DATA DE CRIAÇÃO ESTÁ NO PERÍODO.
+     // A cláusula HAVING COUNT > 0 é redundante com required: true no include, mas vamos manter para clareza na intenção.
+     const referredUsersIncludeWhere: any = {
+          attributes: ['id'], // Só precisamos contar
+     };
+     if (Object.keys(dateFilter).length > 0) {
+          referredUsersIncludeWhere.where = dateFilter;
+     }
+     referredUsersIncludeWhere.required = true; // <--- Garante que só pega referrers que tiveram indicados (no período, se filtro)
+
+
     const potentialReferrers = await this.userModel.findAll({
-        where: Sequelize.literal('EXISTS (SELECT 1 FROM users "referredUsers" WHERE "referredUsers"."referrerId" = "User"."id")'),
         attributes: ['id', 'name', 'referralCode', 'createdAt'],
+        include: [
+            {
+                model: User,
+                as: 'referredUsers',
+                ...referredUsersIncludeWhere, // Aplica a cláusula where condicional e required: true
+            }
+        ],
         order: [['createdAt', 'ASC']],
-         raw: true, // Obter resultados simples
+         raw: true,
+        group: ['User.id', 'User.name', 'User.referralCode', 'User.createdAt'], // Agrupa pelo indicador
+        // *** HAVING redundantemente garante que tem pelo menos 1 indicado no período (já feito pelo required: true) ***
+        // Mas mantido pois o SQL gerado pode ser mais explícito.
+        having: Sequelize.literal(`COUNT("referredUsers"."id") > 0`),
     });
 
     const inactiveReferrersList: any[] = [];
 
-    for (const referrer of potentialReferrers) { // Mantido 'any' aqui
-        // Usa o serviço Auth para verificar se o usuário jogou este mês
+    for (const referrer of potentialReferrers) {
         const isActive = await this.authService.hasPlayedThisMonth(referrer.id);
 
         if (!isActive) {
-            // Adicionar a contagem de indicados para este indicador inativo
-            const referredCount = await this.userModel.count({ where: { referrerId: referrer.id } });
+            const totalReferredCount = await this.userModel.count({ where: { referrerId: referrer.id } });
 
             inactiveReferrersList.push({
                 referrerId: referrer.id,
                 referrerName: referrer.name,
                 referrerCode: referrer.referralCode,
-                referredUsersCount: referredCount, // Adiciona a contagem
+                referredUsersCount: totalReferredCount, // Adiciona a contagem TOTAL
                 status: 'Inativo (Não jogou este mês)',
             });
         }

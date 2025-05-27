@@ -1,5 +1,5 @@
 // src/report/report.controller.ts
-import { Controller, Get, UseGuards, Logger } from '@nestjs/common';
+import { Controller, Get, UseGuards, Logger, Query } from '@nestjs/common'; // Importar Query
 import { AuthGuard } from '@nestjs/passport'; // Assumindo proteção via JWT
 import { ReportService } from './report.service';
 // Importe AuthUser se for necessário verificar o usuário logado ou sua role
@@ -18,60 +18,89 @@ export class ReportController {
   constructor(private readonly reportService: ReportService) {}
 
   @Get('sales/by-price-day')
-  async getSalesByPriceAndDay(): Promise<any[]> {
-    this.logger.log('Endpoint /reports/sales/by-price-day chamado.');
-    return this.reportService.getTotalSoldByPriceAndDay();
+  async getSalesByPriceAndDay(
+      @Query('startDate') startDate?: string,
+      @Query('endDate') endDate?: string,
+  ): Promise<any[]> {
+    this.logger.log(`Endpoint /reports/sales/by-price-day chamado com datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'}`);
+    return this.reportService.getTotalSoldByPriceAndDay(startDate, endDate);
   }
 
   @Get('revenue/gross')
-  async getGrossRevenue(): Promise<{ totalGrossRevenue: number }> {
-    this.logger.log('Endpoint /reports/revenue/gross chamado.');
-    const totalGrossRevenue = await this.reportService.getTotalGrossRevenue();
+  async getGrossRevenue(
+       @Query('startDate') startDate?: string,
+       @Query('endDate') endDate?: string,
+  ): Promise<{ totalGrossRevenue: number }> {
+    this.logger.log(`Endpoint /reports/revenue/gross chamado com datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'}`);
+    const totalGrossRevenue = await this.reportService.getTotalGrossRevenue(startDate, endDate);
     return { totalGrossRevenue };
   }
 
   @Get('revenue/net')
-  async getNetRevenueSimplified(): Promise<{ totalNetRevenueSimplified: number }> {
-    this.logger.log('Endpoint /reports/revenue/net chamado.');
-    const totalNetRevenueSimplified = await this.reportService.getTotalNetRevenueSimplified();
+  async getNetRevenueSimplified(
+       @Query('startDate') startDate?: string,
+       @Query('endDate') endDate?: string,
+  ): Promise<{ totalNetRevenueSimplified: number }> {
+    this.logger.log(`Endpoint /reports/revenue/net chamado com datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'}`);
+    const totalNetRevenueSimplified = await this.reportService.getTotalNetRevenueSimplified(startDate, endDate);
     return { totalNetRevenueSimplified };
   }
 
   @Get('raffles/finished/count')
-  async getFinishedRafflesCount(): Promise<{ count: number }> {
-    this.logger.log('Endpoint /reports/raffles/finished/count chamado.');
-    const count = await this.reportService.getFinishedRafflesCount();
+  async getFinishedRafflesCount(
+       @Query('startDate') startDate?: string,
+       @Query('endDate') endDate?: string,
+  ): Promise<{ count: number }> {
+    this.logger.log(`Endpoint /reports/raffles/finished/count chamado com datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'}`);
+    const count = await this.reportService.getFinishedRafflesCount(startDate, endDate);
     return { count };
   }
 
   @Get('raffles/open')
-  async getOpenRafflesSummary(): Promise<any[]> {
-    this.logger.log('Endpoint /reports/raffles/open chamado.');
-    return this.reportService.getOpenRafflesSummary();
+  async getOpenRafflesSummary(
+       @Query('startDate') startDate?: string,
+       @Query('endDate') endDate?: string,
+  ): Promise<any[]> {
+    this.logger.log(`Endpoint /reports/raffles/open chamado com datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'}`);
+    return this.reportService.getOpenRafflesSummary(startDate, endDate);
   }
 
   @Get('sales/comparison-by-type')
-  async getSalesComparisonByType(): Promise<{ tradicional: number; equipes: number }> {
-     this.logger.log('Endpoint /reports/sales/comparison-by-type chamado.');
-    return this.reportService.getSalesComparisonByType();
+  async getSalesComparisonByType(
+      @Query('startDate') startDate?: string,
+      @Query('endDate') endDate?: string,
+  ): Promise<{ tradicional: number; equipes: number }> {
+     this.logger.log(`Endpoint /reports/sales/comparison-by-type chamado com datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'}`);
+    return this.reportService.getSalesComparisonByType(startDate, endDate);
   }
 
   @Get('users/total-count')
-  async getTotalRegisteredUsers(): Promise<{ count: number }> {
-    this.logger.log('Endpoint /reports/users/total-count chamado.');
-    const count = await this.reportService.getTotalRegisteredUsers();
+  async getTotalRegisteredUsers(
+      @Query('startDate') startDate?: string,
+      @Query('endDate') endDate?: string,
+  ): Promise<{ count: number }> {
+    this.logger.log(`Endpoint /reports/users/total-count chamado com datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'}`);
+    const count = await this.reportService.getTotalRegisteredUsers(startDate, endDate);
     return { count };
   }
 
   @Get('referrals/counts')
-  async getReferralCounts(): Promise<any[]> {
-    this.logger.log('Endpoint /reports/referrals/counts chamado.');
-    return this.reportService.getReferralCounts();
+  async getReferralCounts(
+       @Query('startDate') startDate?: string,
+       @Query('endDate') endDate?: string,
+  ): Promise<any[]> {
+    this.logger.log(`Endpoint /reports/referrals/counts chamado com datas: ${startDate || 'qualquer'} a ${endDate || 'qualquer'}`);
+    return this.reportService.getReferralCounts(startDate, endDate);
   }
 
   @Get('referrals/inactive-this-month')
-  async getInactiveReferrersThisMonth(): Promise<any[]> {
-    this.logger.log('Endpoint /reports/referrals/inactive-this-month chamado.');
-    return this.reportService.getInactiveReferrersThisMonth();
+  async getInactiveReferrersThisMonth(
+      @Query('startDate') startDate?: string,
+      @Query('endDate') endDate?: string,
+  ): Promise<any[]> {
+    // Este relatório ainda tem a lógica de "neste mês" para a *atividade* do indicador,
+    // mas o filtro de data opcional agora se aplica à data de criação dos *indicados*.
+     this.logger.log(`Endpoint /reports/referrals/inactive-this-month chamado (Indicadores inativos neste mês, filtrando indicados criados entre: ${startDate || 'qualquer'} a ${endDate || 'qualquer'}).`);
+    return this.reportService.getInactiveReferrersThisMonth(startDate, endDate);
   }
 }
