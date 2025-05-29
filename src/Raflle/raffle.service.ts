@@ -13,7 +13,9 @@ import { User } from '../models/user/user.model';
 import { Cron, CronExpression } from '@nestjs/schedule'; // Importe CronExpression teste
 import { Op } from 'sequelize';
 import { AuthService } from 'src/Auth/auth.service';
-
+import { sendMessageMass, sendMessageWinning } from '../Whatsapp/sendMessage'; // <-- Adicione esta linha
+import { format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 @Injectable()
 export class RaffleService {
@@ -1014,6 +1016,150 @@ export class RaffleService {
     });
   }
 
+
+ private async notifyWinnersAndLosers(
+      raffle: Raffle,
+      tickets: RaffleTicket[], // Precisamos dos tickets carregados com User
+      winnerUser: User | null, // O User ganhador principal (pode ser null)
+      winningTeamMembersDetails?: any[], // Detalhes dos membros da equipe vencedora (apenas para equipes)
+  ) {
+      this.logger.log(`Iniciando envio de mensagens para rifa ${raffle.id} (Tipo: ${raffle.type})...`);
+
+      const now = new Date(); // Define 'now' dentro desta função
+      // CORREÇÃO: Use format, não Form, e garanta ptBR importado
+      const formattedDrawDate = format(raffle.drawDate || now, 'dd/MM/yyyy HH:mm', { locale: ptBR });
+      const winningTicketDisplay = this.formatTicketNumberDisplay(raffle.winningTicket);
+      const raffleSeries = raffle.raffleIdentifier;
+
+      // --- Lógica para Rifa Tradicional ---
+      if (raffle.type === 'tradicional') {
+          // Enviar mensagem para o ganhador (se houver)
+          // CORREÇÃO: Use winnerUser, não mainWinnerUser
+          if (winnerUser && winnerUser.phone) {
+              try {
+                   await sendMessageWinning(winnerUser.phone, formattedDrawDate, winningTicketDisplay, winningTicketDisplay);
+                   this.logger.log(`Mensagem de vitória enviada para o ganhador ${winnerUser.id} (${winnerUser.phone}) da rifa ${raffle.id}.`);
+              } catch (msgErr: any) {
+                   this.logger.error(`Falha ao enviar mensagem de vitória para o ganhador ${winnerUser.id} (${winnerUser.phone}) da rifa ${raffle.id}: ${msgErr.message}`);
+              }
+          } else if (winnerUser && !winnerUser.phone) { // CORREÇÃO: Use winnerUser
+               this.logger.warn(`Ganhador ${winnerUser.id} da rifa ${raffle.id} não possui número de telefone cadastrado. Mensagem de vitória não enviada.`); // CORREÇÃO: Use winnerUser
+          } else {
+               // CORREÇÃO: Use raffle.winningTicket para o bilhete sorteado, pois winningTicketNumberInternal não está no escopo aqui
+               this.logger.log(`Nenhum ganhador na rifa tradicional ${raffle.id} (bilhete ${raffle.winningTicket} não vendido). Nenhuma mensagem de vitória para usuário específico.`);
+          }
+
+          // Enviar mensagem em massa para os não ganhadores (todos exceto o ganhador principal)
+          const nonWinnerUserIds = new Set<number>();
+          const allTicketBuyerIds = new Set<number>();
+          tickets.forEach(ticket => { // tickets é parâmetro
+              if (ticket.user) {
+                  allTicketBuyerIds.add(ticket.user.id);
+              }
+          });
+
+          allTicketBuyerIds.forEach(userId => {
+              if (!winnerUser || userId !== winnerUser.id) { // CORREÇÃO: Use winnerUser
+                  nonWinnerUserIds.add(userId);
+              }
+          });
+
+          const nonWinnerPhones: string[] = [];
+          const usersWithPhone = new Map<number, string>();
+          tickets.forEach(ticket => { // tickets é parâmetro
+               if (ticket.user && ticket.user.phone) {
+                    usersWithPhone.set(ticket.user.id, ticket.user.phone);
+               }
+          });
+
+          nonWinnerUserIds.forEach(userId => {
+               const phone = usersWithPhone.get(userId);
+               if (phone) {
+                    nonWinnerPhones.push(phone);
+               }
+          });
+
+
+          if (nonWinnerPhones.length > 0) {
+               this.logger.log(`Enviando mensagem de não vitória para ${nonWinnerPhones.length} usuário(s) da rifa ${raffle.id}.`);
+              try {
+                  await sendMessageMass(nonWinnerPhones, formattedDrawDate, winningTicketDisplay, raffleSeries);
+                   this.logger.log(`Mensagem em massa enviada para ${nonWinnerPhones.length} usuário(s) da rifa ${raffle.id}.`);
+              } catch (msgErr: any) {
+                   this.logger.error(`Falha ao enviar mensagem em massa para rifa tradicional ${raffle.id}: ${msgErr.message}`);
+              }
+          } else {
+               this.logger.log(`Nenhum não ganhador com telefone cadastrado na rifa tradicional ${raffle.id}. Nenhuma mensagem em massa enviada.`);
+          }
+      }
+
+      // --- Lógica para Rifa de Equipes ---
+      else if (raffle.type === 'equipes') {
+          const winningTeamName = this.getTeamNameByTicketNumber(raffle, raffle.winningTicket); // Use raffle.winningTicket
+
+           // Enviar mensagem para o ganhador PRINCIPAL (se houver)
+           // CORREÇÃO: Use winnerUser, não mainWinnerUser
+           if (winnerUser && winnerUser.phone) {
+                try {
+                    await sendMessageWinning(winnerUser.phone, formattedDrawDate, winningTicketDisplay, winningTicketDisplay); // Assume que winnerUser está definido e tem phone
+                     this.logger.log(`Mensagem de vitória (principal) enviada para ${winnerUser.id} (${winnerUser.phone}) da rifa ${raffle.id}.`); // CORREÇÃO: Use winnerUser
+                } catch (msgErr: any) {
+                     this.logger.error(`Falha ao enviar mensagem de vitória (principal) para ${winnerUser.id} (${winnerUser.phone}) da rifa ${raffle.id}: ${msgErr.message}`); // CORREÇÃO: Use winnerUser
+                }
+           } else if (winnerUser && !winnerUser.phone) { // CORREÇÃO: Use winnerUser
+                this.logger.warn(`Ganhador principal ${winnerUser.id} da rifa ${raffle.id} não possui número de telefone. Mensagem de vitória não enviada.`); // CORREÇÃO: Use winnerUser
+           } else {
+               this.logger.log(`Nenhum ganhador principal na rifa de equipes ${raffle.id}. Nenhuma mensagem de vitória para usuário específico.`);
+           }
+
+           // Identificar todos os usuários que ganharam algo (principal + equipe)
+           const winningUserIds = new Set<number>(); // IDs dos ganhadores (principal + equipe)
+           if (winnerUser) winningUserIds.add(winnerUser.id); // Adiciona o ganhador principal (CORREÇÃO: Use winnerUser)
+           if (winningTeamMembersDetails) { // winningTeamMembersDetails é parâmetro opcional
+               winningTeamMembersDetails.forEach(member => winningUserIds.add(member.userId)); // Adiciona membros da equipe que ganharam
+           }
+
+
+           // Enviar mensagem em massa para os não ganhadores (todos exceto os que ganharam algo)
+           const nonWinnerPhones: string[] = [];
+           const allTicketBuyerPhones = new Map<number, string>(); // UserID -> Phone
+           tickets.forEach(ticket => { // tickets é parâmetro
+                if (ticket.user && ticket.user.phone) {
+                     allTicketBuyerPhones.set(ticket.user.id, ticket.user.phone);
+                }
+           });
+
+           allTicketBuyerPhones.forEach((phone, userId) => {
+                if (!winningUserIds.has(userId)) { // Se o usuário NÃO está na lista de ganhadores (principal ou equipe)
+                    nonWinnerPhones.push(phone);
+                }
+           });
+
+
+           if (nonWinnerPhones.length > 0) {
+                this.logger.log(`Enviando mensagem de não vitória para ${nonWinnerPhones.length} usuário(s) da rifa de equipes ${raffle.id}.`);
+               try {
+                   await sendMessageMass(nonWinnerPhones, formattedDrawDate, winningTicketDisplay, raffleSeries);
+                    this.logger.log(`Mensagem em massa enviada para ${nonWinnerPhones.length} usuário(s) da rifa de equipes ${raffle.id}.`);
+               } catch (msgErr: any) {
+                    this.logger.error(`Falha ao enviar mensagem em massa para rifa de equipes ${raffle.id}: ${msgErr.message}`);
+               }
+           } else {
+               this.logger.log(`Nenhum não ganhador com telefone cadastrado na rifa de equipes ${raffle.id}. Nenhuma mensagem em massa enviada.`);
+           }
+
+            // NOTA: Mensagens individuais para membros da equipe vencedora (se necessário)
+            // O código comentado para enviar mensagens individuais aos membros da equipe foi mantido como nota.
+            // Se precisar implementá-lo, descomente e ajuste.
+
+      } // Fim da lógica para rifa de equipes
+
+      this.logger.log(`Envio de mensagens para rifa ${raffle.id} concluído.`);
+  }
+
+
+
+
   async getRaffleTickets(raffleId: number): Promise<any[]> {
       this.logger.log(`Buscando tickets para a rifa ${raffleId}...`);
       const raffle = await this.raffleModel.findByPk(raffleId, {
@@ -1042,6 +1188,7 @@ export class RaffleService {
   async finalizeRaffle(raffleId: number, transactionHost?: Transaction): Promise<Raffle> {
     const transaction = transactionHost || await this.sequelize.transaction();
     let raffle: Raffle | null = null;
+    let winnerUser: User | null = null;
 
     try {
       raffle = await this.raffleModel.findByPk(raffleId, {
@@ -1152,6 +1299,27 @@ export class RaffleService {
       if (!transactionHost) await transaction.commit();
       this.logger.log(`Rifa Tradicional ${raffle.id} finalizada com sucesso.`);
 
+      if (!transactionHost) await transaction.commit(); // <-- COMMIT AQUI
+
+      // =============================================
+      // === CHAMADA PARA A NOVA FUNÇÃO DE MENSAGENS ===
+      // =============================================
+   try {
+         // CORREÇÃO: Passe winnerUser (objeto User | null), NÃO winnerUserId
+         await this.notifyWinnersAndLosers(raffle, tickets, winnerUser);
+    } catch (messagingError: any) {
+        this.logger.error(`ERRO DURANTE O PROCESSO DE NOTIFICAÇÃO para rifa ${raffle.id}: ${messagingError.message}`, messagingError.stack);
+    }
+      // =============================================
+      // === FIM DA CHAMADA ===
+      // =============================================
+
+
+       // O reload agora acontece AQUI, após o commit e o envio das mensagens
+       // É importante para garantir que o objeto retornado tenha o estado finalizado
+       // e os dados incluídos para formatRaffleDetails.
+
+      
        await raffle.reload({ // Await the reload
             include: [
                 { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
@@ -1474,7 +1642,7 @@ async getUserRaffleData(userId: number): Promise<any> {
     return this.teamNames;
   }
 
-  async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promise<Raffle> {
+async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promise<Raffle> {
     const transaction = transactionHost || await this.sequelize.transaction();
     let raffle: Raffle | null = null; // raffle pode ser null inicialmente
 
@@ -1541,7 +1709,7 @@ async getUserRaffleData(userId: number): Promise<any> {
       this.logger.log(`Finalizando Rifa de Equipes ${raffle.id}. Bilhete Sorteado (interno): ${winningTicketNumberInternal}. isExtra: ${raffle.isExtra}`);
 
       const tickets = await this.raffleTicketModel.findAll({
-          where: { raffleId: raffle.id },
+          where: { raffleId: raffle.id }, // Confirme se a sintaxe está correta aqui, parece incorreta (deveria ser { raffleId: raffle.id })
           include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }],
           transaction
       });
@@ -1569,7 +1737,10 @@ async getUserRaffleData(userId: number): Promise<any> {
 
 
       const mainWinningTicket = tickets.find(t => t.ticketNumber === winningTicketNumberInternal);
-      const mainWinnerUser = mainWinningTicket?.user;
+
+      // CORREÇÃO: Garante que mainWinnerUser seja User | null
+      const mainWinnerUser = mainWinningTicket?.user || null;
+
 
       if (mainWinnerUser) {
           winnerUserId = mainWinnerUser.id;
@@ -1685,7 +1856,17 @@ async getUserRaffleData(userId: number): Promise<any> {
            teamMembersTotalPrizePaid = 0; // Garante que seja 0
       }
 
-      // raffle aqui NUNCA é null
+      // Salva os detalhes calculados na instância raffle antes do commit
+      (raffle as any).winningTeamName = winningTeamName;
+      (raffle as any).numberOfWinningTeamMembersReceivingPrize = numberOfWinningTeamMembersReceivingPrize;
+      (raffle as any).mainWinnerReferrerActive = mainWinnerReferrerActive;
+      (raffle as any).mainWinnerReferrerCommission = mainWinnerReferrerCommissionPaid; // Comissão PAGA
+      (raffle as any).teamMembersTotalReferrerCommissionTotal = teamMembersTotalReferrerCommissionPaid; // Total de comissões PAGAS aos indic. da equipe
+      (raffle as any).winningTeamMembersDetails = winningTeamMembersDetails; // Detalhes dos membros com prêmios e comissões pagas
+      (raffle as any).mainWinnerPrize = mainWinnerPrizePaid; // Prêmio PAGO ao ganhador principal
+      (raffle as any).teamMembersTotalPrize = teamMembersTotalPrizePaid; // Total de prêmios PAGOS aos membros da equipe
+
+
       await raffle!.update({
           finished: true,
           drawDate: now,
@@ -1694,6 +1875,19 @@ async getUserRaffleData(userId: number): Promise<any> {
 
       if (!transactionHost) await transaction.commit();
       this.logger.log(`Rifa de equipe ${raffle!.id} finalizada com sucesso.`);
+
+      try {
+            // Chama a nova função APÓS o commit, passando os dados necessários
+            // CORREÇÃO: mainWinnerUser agora é User | null devido à alteração acima
+            await this.notifyWinnersAndLosers(raffle!, tickets, mainWinnerUser, winningTeamMembersDetails);
+       } catch (messagingError: any) {
+            // Loga o erro de mensageria, mas não reverte a transação do DB
+            this.logger.error(`ERRO DURANTE O PROCESSO DE NOTIFICAÇÃO para rifa ${raffle!.id}: ${messagingError.message}`, messagingError.stack);
+       }
+       // =============================================
+       // === FIM DA CHAMADA ===
+       // =============================================
+
 
        await raffle!.reload({
              include: [
@@ -1708,7 +1902,7 @@ async getUserRaffleData(userId: number): Promise<any> {
       (raffle as any).numberOfWinningTeamMembersReceivingPrize = numberOfWinningTeamMembersReceivingPrize;
       (raffle as any).mainWinnerReferrerActive = mainWinnerReferrerActive;
       (raffle as any).mainWinnerReferrerCommission = mainWinnerReferrerCommissionPaid; // Comissão PAGA
-      (raffle as any).teamMembersReferrerCommissionTotal = teamMembersTotalReferrerCommissionPaid; // Total de comissões PAGAS aos indic. da equipe
+      (raffle as any).teamMembersTotalReferrerCommissionTotal = teamMembersTotalReferrerCommissionPaid; // Total de comissões PAGAS aos indic. da equipe
       (raffle as any).winningTeamMembersDetails = winningTeamMembersDetails; // Detalhes dos membros com prêmios e comissões pagas
       (raffle as any).mainWinnerPrize = mainWinnerPrizePaid; // Prêmio PAGO ao ganhador principal
       (raffle as any).teamMembersTotalPrize = teamMembersTotalPrizePaid; // Total de prêmios PAGOS aos membros da equipe
