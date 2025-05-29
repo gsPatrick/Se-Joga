@@ -223,7 +223,7 @@ export class RaffleController {
     return await this.raffleService.getUserRaffleData(userId);
   }
 
-  Patch(':raffleId/reopen') // Usando PATCH por ser uma atualização parcial do estado
+  @Patch(':raffleId/reopen') // Usando PATCH por ser uma atualização parcial do estado
   @HttpCode(HttpStatus.OK) // Retorna 200 OK
   async reopenRaffleByIdEndpoint(
       @Param('raffleId', ParseIntPipe) raffleId: number,
