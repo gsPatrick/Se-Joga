@@ -220,4 +220,53 @@ export class RaffleController {
     return await this.raffleService.getUserRaffleData(userId);
   }
 
+  Patch(':raffleId/reopen') // Usando PATCH por ser uma atualização parcial do estado
+  @HttpCode(HttpStatus.OK) // Retorna 200 OK
+  async reopenRaffleByIdEndpoint(
+      @Param('raffleId', ParseIntPipe) raffleId: number,
+      // @Request() req, // Se precisar do usuário para logs ou contexto
+  ): Promise<any> {
+      this.logger.log(`Endpoint para reabrir rifa ID ${raffleId} chamado...`);
+      try {
+          await this.raffleService.reopenRaffleById(raffleId);
+          return { message: `Rifa com ID ${raffleId} reaberta com sucesso.` };
+      } catch (error) {
+          // Re-throw exceptions handled by NestJS (NotFound, BadRequest, InternalServerError)
+          if (error instanceof NotFoundException || error instanceof BadRequestException || error instanceof InternalServerErrorException) {
+             throw error;
+          }
+          // Handle any other unexpected errors
+          this.logger.error(`Erro no endpoint ao reabrir rifa ${raffleId}: ${(error as Error).message}`, (error as Error).stack);
+          throw new InternalServerErrorException(`Erro interno ao tentar reabrir a rifa com ID ${raffleId}.`);
+      }
+  }
+
+   @Delete(':raffleId') // Usando DELETE com o ID na URL
+  @HttpCode(HttpStatus.OK) // Retorna 200 OK em caso de sucesso
+  async deleteRaffleByIdEndpoint(
+      @Param('raffleId', ParseIntPipe) raffleId: number,
+      // @Request() req, // Se precisar do usuário para logs ou contexto
+  ): Promise<any> {
+      this.logger.warn(`Endpoint para apagar a rifa ID ${raffleId} chamado. Verificando permissões...`);
+       // Adicione verificações de permissão aqui (Ex: req.user.role === UserRole.ADMIN)
+       // if (req.user.role !== UserRole.ADMIN) {
+       //    throw new ForbiddenException('Apenas administradores podem executar esta operação.');
+       // }
+
+      try {
+          await this.raffleService.deleteRaffleById(raffleId);
+          return {
+              message: `Rifa com ID ${raffleId} e seus registros associados foram excluídos com sucesso.`,
+          };
+      } catch (error) {
+           // Re-throw exceptions handled by NestJS (NotFound, BadRequest, InternalServerError)
+           if (error instanceof NotFoundException || error instanceof BadRequestException || error instanceof InternalServerErrorException) {
+              throw error;
+           }
+           // Para qualquer outro erro inesperado
+          this.logger.error(`Erro inesperado no endpoint deleteRaffleById: ${(error as Error).message}`, (error as Error).stack);
+          throw new InternalServerErrorException(`Erro interno ao tentar apagar a rifa com ID ${raffleId}.`);
+      }
+  }
+
 }

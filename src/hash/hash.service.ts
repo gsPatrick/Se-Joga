@@ -21,7 +21,8 @@
       private generatedNumberModel: typeof GeneratedNumber,
     ) {
       this.updateHash();
-      setInterval(() => this.updateHash(), 600000);
+      // Ajuste o intervalo se necessário, mas mantenha-o para buscar hashes periodicamente
+      setInterval(() => this.updateHash(), 600000); // 10 minutos
     }
 
     async getLatestHash(): Promise<string> {
@@ -58,23 +59,24 @@
           });
           this.latestHash = hash;
           this.lastHashUpdate = Date.now();
-          this.logger.log(`Novo hash da blockchain armazenado: ${hash}`);
+          // this.logger.log(`Novo hash da blockchain armazenado: ${hash}`); // <-- COMENTAR/REMOVER ESTA LINHA
 
           // **1. Criar a seed vazia primeiro**
           const newSeed = await this.seedService.createSeed(newHash.id, ''); // Passando string vazia
-          this.logger.log(`Seed vazia criada para o hashId ${newHash.id}`);
+          // this.logger.log(`Seed vazia criada para o hashId ${newHash.id}`); // <-- COMENTAR/REMOVER ESTA LINHA
 
           // **2. Gerar e armazenar a seed (sequência de números) DEPOIS de criar a seed vazia**
           await this.generateAndStoreSeed(newSeed.id, hash);
         } else {
           this.latestHash = existingHash.hash;
           this.lastHashUpdate = existingHash.createdAt.getTime();
-          this.logger.log(
-            `Hash existente encontrado e reutilizado: ${this.latestHash}`,
-          );
+          // this.logger.log( // <-- COMENTAR/REMOVER ESTA LINHA
+          //   `Hash existente encontrado e reutilizado: ${this.latestHash}`,
+          // );
         }
       } catch (error) {
         const err = error as Error;
+        // Mantenha este log de ERRO!
         this.logger.error(
           `Erro ao buscar ou armazenar o hash da blockchain: ${err.message}`,
           err.stack,
@@ -83,13 +85,14 @@
     }
 
     private async generateAndStoreSeed(seedId: number, hash: string) {
-      this.logger.debug(`Gerando seed para o seedId: ${seedId}, hash: ${hash}`);
+      // this.logger.debug(`Gerando seed para o seedId: ${seedId}, hash: ${hash}`); // <-- COMENTAR/REMOVER ESTA LINHA
       const numbers: number[] = [];
       for (let i = 0; i < 5000; i++) {
         try {
           const number = await this.seedService.getNextRandomNumber(hash, i);
           numbers.push(number);
         } catch (error) {
+          // Mantenha este log de ERRO!
           this.logger.error(
             `Erro ao gerar número na iteração ${i}: ${ (error as Error).message}`,
             (error as Error).stack,
@@ -107,17 +110,19 @@
         if (seed) {
           seed.seed = seedString;
           await seed.save();
-          this.logger.log(`Seed gerada e armazenada para o seedId ${seedId}`);
+          // this.logger.log(`Seed gerada e armazenada para o seedId ${seedId}`); // <-- COMENTAR/REMOVER ESTA LINHA
 
           // **4. Gerar e salvar os GeneratedNumbers APÓS salvar a seed completa**
           await this.seedService.generateNumbersForSeed(seedId);
         } else {
+          // Mantenha este log de ERRO!
           this.logger.error(
             `Seed com seedId ${seedId} não encontrada para atualização.`,
           );
         }
       } catch (error) {
         const err = error as Error;
+        // Mantenha este log de ERRO!
         this.logger.error(
           `Erro ao armazenar a seed para o seedId ${seedId}: ${err.message}`,
           err.stack,
@@ -130,4 +135,4 @@
           // Usar SHA-256 para gerar uma chave de 32 bytes a partir do hash
           return createHash('sha256').update(hash).digest();
       }
-      }
+  }

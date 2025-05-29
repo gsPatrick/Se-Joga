@@ -1197,6 +1197,8 @@ export class RaffleService {
     }
   }
 
+  
+
 
     @Cron('*/5 * * * *')
   async finalizeRafflesCronJob() {
@@ -1207,8 +1209,7 @@ export class RaffleService {
           where: {
               finished: false,
               [Op.or]: [
-                  { soldTickets: { [Op.gte]: Sequelize.col('totalTickets') } },
-                  { endDate: { [Op.lte]: now } }
+                  { soldTickets: { [Op.gte]: Sequelize.col('totalTickets') } }
               ]
           },
            order: [['endDate', 'ASC'], ['createdAt', 'ASC']]
@@ -1784,4 +1785,105 @@ async getUserRaffleData(userId: number): Promise<any> {
           availableTicketsByTeam: availableTicketsByTeam,
       };
   }
+
+
+  async reopenRaffleById(raffleId: number): Promise<Raffle> {
+      this.logger.log(`Tentando reabrir rifa com ID: ${raffleId}...`);
+
+      const raffle = await this.raffleModel.findByPk(raffleId);
+
+      if (!raffle) {
+          this.logger.warn(`Tentativa de reabrir rifa ${raffleId}: Rifa não encontrada.`);
+          throw new NotFoundException(`Rifa com ID ${raffleId} não encontrada.`);
+      }
+
+      if (!raffle.finished) {
+           this.logger.warn(`Tentativa de reabrir rifa ${raffleId}: Rifa já está ativa.`);
+           throw new BadRequestException(`A rifa com ID ${raffleId} já está ativa.`);
+      }
+
+       // Adicionar verificação: só reabrir se não esgotou?
+       // A instrução foi reabrir as que não esgotaram, então vamos adicionar essa condição.
+       if (raffle.soldTickets >= raffle.totalTickets) {
+           this.logger.warn(`Tentativa de reabrir rifa ${raffleId}: Rifa já esgotou os bilhetes.`);
+           throw new BadRequestException(`A rifa com ID ${raffleId} esgotou os bilhetes e não pode ser reaberta por este método.`);
+       }
+
+
+      try {
+          // Ao reabrir, precisamos limpar os dados de sorteio/ganhador
+          await raffle.update({
+              finished: false,
+              drawDate: null, // Limpa a data do sorteio
+              winnerUserId: null, // Limpa o ganhador
+              winningTicket: null, // Limpa o bilhete vencedor (o bilhete sorteado)
+              // Manter soldTickets, ticketPrice, totalTickets, dates, etc. como estão.
+              // O 'isExtra' também deve ser mantido.
+          });
+
+          this.logger.log(`Rifa ${raffleId} (${raffle.raffleIdentifier}, R$ ${raffle.ticketPrice}, Tipo: ${raffle.type}) reaberta com sucesso (finished=false).`);
+
+          // Retornar a rifa atualizada
+          // Opcional: Recarregar com includes se o chamador precisar dos relacionamentos
+          // await raffle.reload({ /* inclua os modelos necessários aqui se quiser retorná-los */ });
+          return raffle;
+
+      } catch (error) {
+          this.logger.error(`Erro ao reabrir a rifa ${raffleId}: ${(error as Error).message}`, (error as Error).stack);
+          throw new InternalServerErrorException(`Erro interno ao reabrir a rifa com ID ${raffleId}.`);
+      }
+    }
+
+      async deleteRaffleById(raffleId: number): Promise<void> {
+      this.logger.warn(`INICIANDO PROCESSO DE EXCLUSÃO DA RIFA ID ${raffleId}. ISSO É IRREVERSÍVEL PARA ESTA RIFA!`);
+
+      const transaction = await this.sequelize.transaction();
+
+      try {
+          // Verificar se a rifa existe primeiro
+          const raffle = await this.raffleModel.findByPk(raffleId, { transaction });
+          if (!raffle) {
+              await transaction.rollback(); // Rollback antes de lançar erro
+              this.logger.warn(`Tentativa de excluir rifa ${raffleId}: Rifa não encontrada.`);
+              throw new NotFoundException(`Rifa com ID ${raffleId} não encontrada.`);
+          }
+
+          // 1. Apagar RaffleTickets associados a esta rifa
+          const ticketsDeleted = await this.raffleTicketModel.destroy({ where: { raffleId: raffleId }, transaction });
+          this.logger.log(`Excluídos ${ticketsDeleted} RaffleTickets associados à rifa ${raffleId}.`);
+
+          // 2. Apagar RaffleNumbers associados a esta rifa
+          const raffleNumbersDeleted = await this.raffleNumberModel.destroy({ where: { raffleId: raffleId }, transaction });
+           this.logger.log(`Excluídos ${raffleNumbersDeleted} RaffleNumbers associados à rifa ${raffleId}.`);
+
+          // 3. Apagar a Rifa principal
+          const rafflesDeleted = await this.raffleModel.destroy({ where: { id: raffleId }, transaction });
+          this.logger.log(`Excluída ${rafflesDeleted} Rifa principal (ID ${raffleId}).`);
+
+          await transaction.commit();
+          this.logger.warn(`PROCESSO DE EXCLUSÃO DA RIFA ID ${raffleId} CONCLUÍDO COM SUCESSO.`);
+
+      } catch (error) {
+           if (transaction && (transaction as any).finished === null) { // Verifica se a transação não foi finalizada
+               try {
+                   await transaction.rollback();
+                   this.logger.warn(`Rollback executado para exclusão da rifa ${raffleId} devido a erro no catch.`);
+               } catch (rollbackError: any) {
+                   // Evitar logar erro de rollback se já foi feito ou não é necessário
+                    if (!rollbackError.message?.includes('already rollbacked') && !rollbackError.message?.includes('not in progress')) {
+                       this.logger.error(`Erro crítico ao tentar executar rollback no CATCH para exclusão da rifa ${raffleId}: ${rollbackError}`);
+                    }
+               }
+            }
+
+          // Re-throw errors that are already handled (like NotFoundException)
+           if (error instanceof NotFoundException || error instanceof BadRequestException) {
+              throw error;
+           }
+
+          this.logger.error(`ERRO CRÍTICO AO EXCLUIR A RIFA ID ${raffleId}: ${(error as Error).message}`, (error as Error).stack);
+          throw new InternalServerErrorException(`Erro interno ao tentar apagar a rifa com ID ${raffleId}.`);
+      }
+  }
+
 }
