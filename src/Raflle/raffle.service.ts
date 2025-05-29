@@ -10,7 +10,7 @@ import { RaffleTicket } from 'src/models/raffle/raffle-ticket.model';
 import { Sequelize } from 'sequelize-typescript';
 import { Transaction } from 'sequelize';
 import { User } from '../models/user/user.model';
-import { Cron, CronExpression } from '@nestjs/schedule'; // Importe CronExpression
+import { Cron, CronExpression } from '@nestjs/schedule'; // Importe CronExpression teste
 import { Op } from 'sequelize';
 import { AuthService } from 'src/Auth/auth.service';
 
