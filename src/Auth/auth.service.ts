@@ -195,7 +195,7 @@ export class AuthService {
     return this.userModel.findAll({
       attributes: { exclude: ['password'] }, // Exclui a senha do retorno
       include: [
-        { model: User, as: 'referrer', attributes: ['id', 'name'] }, // Inclui o indicador
+        { model: User, as: 'referrer', attributes: ['id', 'name', 'cpf'] }, // Inclui o indicador
         { model: User, as: 'referredUsers', attributes: ['id', 'name'] } // Inclui os indicados (pode ser grande)
       ]
     });
@@ -205,7 +205,7 @@ export class AuthService {
     const user = await this.userModel.findByPk(userId, {
       attributes: { exclude: ['password'] }, // Exclui a senha do retorno
       include: [
-        { model: User, as: 'referrer', attributes: ['id', 'name'] }, // Inclui o indicador
+        { model: User, as: 'referrer', attributes: ['id', 'name', 'cpf'] }, // Inclui o indicador
         // Não incluir 'referredUsers' aqui para evitar carregar muitos dados no perfil
       ]
     });
