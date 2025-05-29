@@ -9,11 +9,14 @@ import {
   HttpCode,
   HttpStatus,
   UseGuards,
-  InternalServerErrorException,
+  InternalServerErrorException, // <-- Já estava aqui, mas garante que está na lista
   Query,
-  BadRequestException,
-  Request, // Import Request from @nestjs/common
-} from '@nestjs/common';
+  BadRequestException, // <-- Adicione
+  Request,
+  Patch, // <-- Adicione
+  Delete, // <-- Adicione
+  NotFoundException, // <-- Adicione
+} from '@nestjs/common'; // <-- Verifique se está importando de @nestjs/common
 import { RaffleService } from './raffle.service';
 import { AuthGuard } from '@nestjs/passport'; // Ajuste o caminho se necessário
 import { Raffle } from 'src/models/raffle/raffle.model'; // Ajuste o caminho
