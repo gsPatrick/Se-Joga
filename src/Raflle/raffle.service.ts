@@ -1711,17 +1711,22 @@ async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promi
          throw new BadRequestException(`A Rifa ${raffleId} é do tipo ${raffle.type} e não pode ser finalizada por este método.`);
        }
 
-      const now = new Date();
+      // ======================================================================
+      // === MODIFICAÇÃO: Verificar APENAS se está esgotada para finalizar ===
+      // ======================================================================
       const isSoldOut = raffle.soldTickets >= raffle.totalTickets;
-      const isEndDateReached = raffle.endDate && raffle.endDate <= now;
 
-      if (!isSoldOut && !isEndDateReached) {
+      if (!isSoldOut) {
            if (!transactionHost) await transaction.rollback();
          throw new BadRequestException(
-           `A rifa de equipes ${raffleId} ainda não pode ser finalizada. Vendidos: ${raffle.soldTickets}/${raffle.totalTickets}. Fim: ${raffle.endDate?.toISOString() ?? 'N/A'}.`
+           `A rifa de equipes ${raffleId} ainda não pode ser finalizada. Bilhetes vendidos: ${raffle.soldTickets}/${raffle.totalTickets}. Apenas finaliza quando esgota.`
          );
       }
+      // ======================================================================
+      // ======================================================================
 
+
+      const now = new Date();
       const winningTicketNumberInternal = raffle.winningTicket;
        if (!winningTicketNumberInternal) {
             if (!transactionHost) await transaction.rollback();
@@ -1729,15 +1734,16 @@ async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promi
        }
       this.logger.log(`Finalizando Rifa de Equipes ${raffle.id}. Bilhete Sorteado (interno): ${winningTicketNumberInternal}. isExtra: ${raffle.isExtra}`);
 
+      // Carrega todos os tickets para a rifa, incluindo o usuário e o indicador
       const tickets = await this.raffleTicketModel.findAll({
-          where: { raffleId: raffle.id }, // Confirme se a sintaxe está correta aqui, parece incorreta (deveria ser { raffleId: raffle.id })
-          include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }],
+          where: { raffleId: raffle.id },
+          include: [{ model: User, attributes: ['id', 'name', 'phone', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }],
           transaction
       });
 
       const totalCollectedValue = Number(raffle.ticketPrice) * Number(raffle.soldTickets);
       const houseSharePercentage = 0.20; // 20% para a casa
-      const referrerCommissionRateOnHouseShare = 0.05; // 5% DA PARTE DA CASA (20%)
+      const referrerCommissionRateOnHouseShare = 0.05; // 5% DA PARTE DA CASA (20%) = 1% do total
 
       const mainPrizePoolPercentage = 0.50; // 50% do total para o ganhador principal
       const teamPrizePoolPercentage = 0.30; // 30% do total para a equipe
@@ -1804,15 +1810,15 @@ async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promi
       const winningTeamName = this.getTeamNameByTicketNumber(raffle!, winningTicketNumberInternal);
 
       if (winningTeamName !== 'N/A' && winningTeamName !== 'Inválido' && winningTeamName !== 'Erro') {
+          // Filtra tickets da equipe vencedora, EXCLUINDO o bilhete vencedor principal (se houver)
           const winningTeamTickets = tickets.filter(
-              // raffle aqui NUNCA é null
               (ticket) => this.getTeamNameByTicketNumber(raffle!, ticket.ticketNumber) === winningTeamName &&
-                          (mainWinnerUser ? ticket.userId !== mainWinnerUser.id : true) // Exclui o ganhador principal
+                          (mainWinningTicket ? ticket.id !== mainWinningTicket.id : true) // Exclui o ticket vencedor principal se ele existir
           );
 
           const teamMemberUsersWhoBought = new Map<number, User>(); // UserID -> User object
           winningTeamTickets.forEach(ticket => {
-              if (ticket.user && !teamMemberUsersWhoBought.has(ticket.user.id)) { // Apenas usuários únicos
+              if (ticket.user && !teamMemberUsersWhoBought.has(ticket.user.id)) { // Apenas usuários únicos que compraram tickets NA EQUIPE VENCEDORA (excluindo o ticket principal)
                    teamMemberUsersWhoBought.set(ticket.user.id, ticket.user);
               }
           });
@@ -1865,11 +1871,11 @@ async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promi
                           referrerActive: memberReferrerActive,
                           hasReferrer: !!user.referrerId,
                           // raffle aqui NUNCA é null
-                          tickets: tickets.filter(t => t.userId === user.id && this.getTeamNameByTicketNumber(raffle!, t.ticketNumber) === winningTeamName).map(t => t.ticketNumber),
+                          tickets: tickets.filter(t => t.userId === user.id && this.getTeamNameByTicketNumber(raffle!, t.ticketNumber) === winningTeamName && t.id !== mainWinningTicket?.id).map(t => t.ticketNumber), // Filtra apenas os tickets do membro nesta equipe (excluindo o principal se ele também estiver nesta equipe)
                        });
               }
           } else {
-              this.logger.log(`Equipe Vencedora ${winningTeamName}: Nenhum outro membro (além do vencedor principal, se houver) comprou bilhetes. Prêmio da equipe (R$ ${actualTeamPrizePool.toFixed(2)}) não distribuído aos jogadores.`);
+              this.logger.log(`Equipe Vencedora ${winningTeamName}: Nenhum outro membro (além do vencedor principal, se houver e ele comprou ticket nesta equipe) comprou bilhetes. Prêmio da equipe (R$ ${actualTeamPrizePool.toFixed(2)}) não distribuído aos jogadores.`);
               teamMembersTotalPrizePaid = 0; // Garante que seja 0
           }
       } else {
@@ -1900,6 +1906,7 @@ async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promi
       try {
             // Chama a nova função APÓS o commit, passando os dados necessários
             // CORREÇÃO: mainWinnerUser agora é User | null devido à alteração acima
+            // Precisamos dos tickets carregados com o telefone para a notificação
             await this.notifyWinnersAndLosers(raffle!, tickets, mainWinnerUser, winningTeamMembersDetails);
        } catch (messagingError: any) {
             // Loga o erro de mensageria, mas não reverte a transação do DB
@@ -1913,7 +1920,7 @@ async finalizeTeamRaffle(raffleId: number, transactionHost?: Transaction): Promi
        await raffle!.reload({
              include: [
                   { model: User, as: 'winnerUser', attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] },
-                  { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] },
+                  { model: RaffleTicket, as: 'tickets', include: [{ model: User, attributes: ['id', 'name', 'referrerId', 'phone'], include: [{ model: User, as: 'referrer', attributes: ['id', 'name'] }] }] },
                   { model: RaffleNumber, include: [{ model: GeneratedNumber, include: [{ model: Seed, include: [BlockchainHash] }] }] },
               ],
          });
