@@ -11,11 +11,35 @@ import { GeneratedNumber } from '../models/generated-number.model';
 import { CacaNiquelRoundSeed } from '../models/caca-niquel/caca-niquel-round-seed.model';
 import { BlockchainHash } from 'src/models/blockchain-hash.model';
 
+// Interface para um retorno de pagamento mais descritivo
+interface PayoutInfo {
+    payout: number;
+    multiplier: number;
+    name: string;
+    description: string;
+    animationHint: 'none' | 'small-win' | 'medium-win' | 'big-win' | 'jackpot';
+}
+
 @Injectable()
 export class CacaNiquelService {
     private readonly logger = new Logger(CacaNiquelService.name);
 
-    private readonly symbols = ['elemento_A', 'elemento_B', 'elemento_C', 'elemento_D', 'elemento_E', 'elemento_F', 'elemento_G', 'elemento_H', 'elemento_I', 'elemento_J'];
+    // Mapeamento dos elementos para ícones amigáveis
+    private readonly symbolMap = {
+        'elemento_A': 'urso', // URSO (JACKPOT)
+        'elemento_B': 'strawberry',
+        'elemento_C': 'diamond',
+        'elemento_D': 'cherry',
+        'elemento_E': 'roulette',
+        'elemento_F': 'joker',
+        'elemento_G': 'pineapple',
+        'elemento_H': 'number7',
+        'elemento_I': 'grape',
+        'elemento_J': 'watermelon',
+    };
+    private readonly symbols = Object.keys(this.symbolMap); // ['elemento_A', 'elemento_B', ...]
+    private readonly ursoSymbol = 'elemento_A';
+
 
     constructor(
         @InjectModel(CacaNiquelRound) private cacaNiquelRoundModel: typeof CacaNiquelRound,
@@ -28,6 +52,7 @@ export class CacaNiquelService {
         private sequelize: Sequelize,
     ) { }
 
+    // (O método createCacaNiquelRound continua o mesmo)
     async createCacaNiquelRound(userId: number): Promise<CacaNiquelRound> {
         // 1. Busca o usuário
         const user = await this.userModel.findByPk(userId);
@@ -73,6 +98,7 @@ export class CacaNiquelService {
         this.logger.log(`Rodada de caça-níquel criada com id: ${cacaNiquelRound.id} e seed id: ${newSeed.id}`);
         return cacaNiquelRound;
     }
+
 
     private async getNextSymbols(roundId: number): Promise<string[]> {
         const cacaNiquelRound = await this.cacaNiquelRoundModel.findByPk(roundId, {
@@ -123,60 +149,80 @@ export class CacaNiquelService {
         }
 
         return symbolsResult;
-    }   
+    }
 
 
     async buyBet(
         userId: number,
         roundId: number,
         betData: { betAmount: number, principalSymbol: string, secondarySymbol: string },
-    ): Promise<CacaNiquelBet> {
+    ): Promise<any> { // <--- RETORNO MUDOU PARA ANY PARA MAIOR FLEXIBILIDADE
         const transaction = await this.sequelize.transaction();
         try {
-            // 1. Buscar o usuário
             const user = await this.userModel.findByPk(userId, { transaction });
-            if (!user) {
-                throw new NotFoundException('Usuário não encontrado.');
-            }
+            if (!user) throw new NotFoundException('Usuário não encontrado.');
 
-            // 2. Buscar a rodada
             const cacaNiquelRound = await this.cacaNiquelRoundModel.findByPk(roundId, { transaction });
-            if (!cacaNiquelRound) {
-                throw new NotFoundException('Rodada não encontrada.');
-            }
+            if (!cacaNiquelRound) throw new NotFoundException('Rodada não encontrada.');
+            if (cacaNiquelRound.finished) throw new BadRequestException('Esta rodada já foi finalizada.');
 
-            // 3. Verificar se a rodada já foi finalizada
-            if (cacaNiquelRound.finished) {
-                throw new BadRequestException('Esta rodada já foi finalizada.');
-            }
+            if (user.balance < betData.betAmount) throw new BadRequestException('Saldo insuficiente.');
 
-            // 4. Gerar símbolos para a rodada
             const generatedSymbols = await this.getNextSymbols(roundId);
 
-            // 5. Criar a aposta
-            const newBet = await this.cacaNiquelBetModel.create(
-                {
-                    userId,
-                    roundId,
-                    betAmount: betData.betAmount,
-                    principalSymbol: betData.principalSymbol,
-                    secondarySymbol: betData.secondarySymbol,
-                    generatedSymbols: generatedSymbols,
-                    win: false, // Inicialmente como não vencedor
-                    payout: 0, // Inicialmente sem payout
-                },
-                { transaction }
-            );
+            // Objeto de aposta temporário para passar para o cálculo
+            const tempBet = {
+                betAmount: betData.betAmount,
+                principalSymbol: betData.principalSymbol,
+                secondarySymbol: betData.secondarySymbol,
+                generatedSymbols: generatedSymbols,
+            };
 
-            // 6. Atualizar o saldo do usuário
-            if (user.balance < betData.betAmount) {
-                throw new BadRequestException('Saldo insuficiente.');
-            }
-            await user.update({ balance: user.balance - betData.betAmount }, { transaction });
+            const payoutInfo = this.calculatePayout(tempBet);
+
+            // Criar a aposta no DB
+            const newBet = await this.cacaNiquelBetModel.create({
+                userId,
+                roundId,
+                betAmount: betData.betAmount,
+                principalSymbol: betData.principalSymbol,
+                secondarySymbol: betData.secondarySymbol,
+                generatedSymbols: generatedSymbols,
+                win: payoutInfo.payout > 0,
+                payout: payoutInfo.payout,
+            }, { transaction });
+
+            // Atualizar o saldo do usuário (subtrai aposta, soma o ganho)
+            const newBalance = user.balance - betData.betAmount + payoutInfo.payout;
+            await user.update({ balance: newBalance }, { transaction });
+
+            // Finaliza a rodada automaticamente
+            cacaNiquelRound.finished = true;
+            await cacaNiquelRound.save({ transaction });
 
             await transaction.commit();
-            this.logger.log(`Usuário ${userId} fez uma aposta na rodada ${roundId} no valor de ${betData.betAmount} com símbolos principal: ${betData.principalSymbol} e secundário: ${betData.secondarySymbol}. Símbolos gerados: ${generatedSymbols.join(', ')}`);
-            return newBet;
+
+            // *** CONSTRUIR A RESPOSTA PERSONALIZADA ***
+            const symbolCounts: { [key: string]: number } = {};
+            generatedSymbols.forEach(symbol => {
+                const iconName = this.symbolMap[symbol as keyof typeof this.symbolMap];
+                symbolCounts[iconName] = (symbolCounts[iconName] || 0) + 1;
+            });
+
+            const rolledSymbolsResult = Object.entries(this.symbolMap).map(([key, icon], index) => ({
+                id: index + 1,
+                icon: icon,
+                value: symbolCounts[icon] || 0, // value é a contagem de vezes que o ícone apareceu
+            }));
+            
+            this.logger.log(`Usuário ${userId} apostou R$${betData.betAmount} e ganhou R$${payoutInfo.payout.toFixed(2)}. Combinação: ${payoutInfo.name}. Símbolos: ${generatedSymbols.join(', ')}`);
+
+            return {
+                bet: newBet.toJSON(),
+                payoutInfo: payoutInfo,
+                rolledSymbols: rolledSymbolsResult,
+                newBalance: newBalance
+            };
 
         } catch (error) {
             await transaction.rollback();
@@ -188,53 +234,73 @@ export class CacaNiquelService {
         }
     }
 
-    private calculatePayout(bet: CacaNiquelBet): number {
-        const generatedSymbols = bet.generatedSymbols;
-        const principalSymbol = bet.principalSymbol;
-        const secondarySymbol = bet.secondarySymbol;
-        const ursoSymbol = 'elemento_A'; // Urso é fixo como elemento_A
-        const outroSymbols = this.symbols.filter(sym => sym !== ursoSymbol && sym !== principalSymbol && sym !== secondarySymbol);
+    private calculatePayout(bet: {
+        betAmount: number;
+        principalSymbol: string;
+        secondarySymbol: string;
+        generatedSymbols: string[];
+    }): PayoutInfo {
+        const { betAmount, principalSymbol, secondarySymbol, generatedSymbols } = bet;
 
+        // Filtra os símbolos que não são o urso, o principal ou o secundário
+        const outroSymbols = this.symbols.filter(sym => sym !== this.ursoSymbol && sym !== principalSymbol && sym !== secondarySymbol);
 
-        const symbolCounts: { [symbol: string]: number } = {
-            [ursoSymbol]: 0,
-            [principalSymbol]: 0,
-            [secondarySymbol]: 0,
-        };
-        outroSymbols.forEach(sym => symbolCounts[sym] = 0); // Inicializa contagem para 'Outros'
-
+        // Conta a ocorrência de cada tipo de símbolo no resultado
+        const symbolCounts: { [symbol: string]: number } = {};
         generatedSymbols.forEach(symbol => {
-            if (symbol === ursoSymbol) symbolCounts[ursoSymbol]++;
-            else if (symbol === principalSymbol) symbolCounts[principalSymbol]++;
-            else if (symbol === secondarySymbol) symbolCounts[secondarySymbol]++;
-            else if (outroSymbols.includes(symbol)) symbolCounts[symbol]++; // Conta 'Outros'
+            symbolCounts[symbol] = (symbolCounts[symbol] || 0) + 1;
         });
 
-        let payoutMultiplier = 0;
+        let multiplier = 0;
+        let name = "Sem Prêmio";
+        let description = "Nenhuma combinação vencedora.";
+        let animationHint: PayoutInfo['animationHint'] = 'none';
 
-        // Adaptação da tabela de pagamentos para usar os símbolos e contagens
-        if (symbolCounts[secondarySymbol] === 1 && outroSymbols.some(sym => symbolCounts[sym] === 2 )) payoutMultiplier = 1.2; // Linha 1
-        else if (symbolCounts[principalSymbol] === 1 && outroSymbols.some(sym => symbolCounts[sym] === 2 )) payoutMultiplier = 1.5; // Linha 2
-        else if (symbolCounts[principalSymbol] === 1 && symbolCounts[ursoSymbol] === 1) payoutMultiplier = 2.0; // Linha 3
-        else if (symbolCounts[secondarySymbol] === 1 && symbolCounts[ursoSymbol] === 1) payoutMultiplier = 1.8; // Linha 4
-        else if (symbolCounts[principalSymbol] === 1 && symbolCounts[secondarySymbol] === 1) payoutMultiplier = 2.5; // Linha 5
-        else if (symbolCounts[principalSymbol] === 1 && symbolCounts[secondarySymbol] === 1 && symbolCounts[ursoSymbol] === 1) payoutMultiplier = 3.0; // Linha 6
-        else if (symbolCounts[principalSymbol] === 1 && symbolCounts[ursoSymbol] === 2) payoutMultiplier = 5.0; // Linha 7
-        else if (symbolCounts[secondarySymbol] === 1 && symbolCounts[ursoSymbol] === 2) payoutMultiplier = 3.5; // Linha 8
-        else if (symbolCounts[principalSymbol] === 2 && outroSymbols.some(sym => symbolCounts[sym] === 1 )) payoutMultiplier = 3.5; // Linha 9
-        else if (symbolCounts[principalSymbol] === 2 && symbolCounts[ursoSymbol] === 1) payoutMultiplier = 8.0; // Linha 10
-        else if (symbolCounts[principalSymbol] === 2 && symbolCounts[secondarySymbol] === 1) payoutMultiplier = 6.0; // Linha 11
-        else if (symbolCounts[principalSymbol] === 3) payoutMultiplier = 10.0; // Linha 12
-        else if (symbolCounts[secondarySymbol] === 2 && outroSymbols.some(sym => symbolCounts[sym] === 1 )) payoutMultiplier = 2.5; // Linha 13
-        else if (symbolCounts[secondarySymbol] === 2 && symbolCounts[ursoSymbol] === 1) payoutMultiplier = 4.0; // Linha 14
-        else if (symbolCounts[secondarySymbol] === 2 && symbolCounts[principalSymbol] === 1) payoutMultiplier = 3.0; // Linha 15
-        else if (symbolCounts[secondarySymbol] === 3) payoutMultiplier = 6.0; // Linha 16
+        // Tabela de pagamentos adaptada para retornar um objeto PayoutInfo
+        if (symbolCounts[secondarySymbol] === 1 && outroSymbols.some(sym => (symbolCounts[sym] || 0) === 2)) {
+            multiplier = 1.2; name = "Par de Outros com Secundário"; description = "Um símbolo secundário e um par de outros símbolos."; animationHint = 'small-win';
+        } else if (symbolCounts[principalSymbol] === 1 && outroSymbols.some(sym => (symbolCounts[sym] || 0) === 2)) {
+            multiplier = 1.5; name = "Par de Outros com Principal"; description = "Um símbolo principal e um par de outros símbolos."; animationHint = 'small-win';
+        } else if (symbolCounts[principalSymbol] === 1 && symbolCounts[this.ursoSymbol] === 1 && generatedSymbols.length === 2) { // Exemplo hipotético de 2 rolos
+            multiplier = 2.0; name = "Principal e Urso"; description = "Um símbolo principal e um urso."; animationHint = 'medium-win';
+        } else if (symbolCounts[secondarySymbol] === 1 && symbolCounts[this.ursoSymbol] === 1 && generatedSymbols.length === 2) {
+            multiplier = 1.8; name = "Secundário e Urso"; description = "Um símbolo secundário e um urso."; animationHint = 'medium-win';
+        } else if (symbolCounts[principalSymbol] === 1 && symbolCounts[secondarySymbol] === 1 && generatedSymbols.length === 2) {
+            multiplier = 2.5; name = "Principal e Secundário"; description = "Um símbolo principal e um secundário."; animationHint = 'medium-win';
+        } else if (symbolCounts[principalSymbol] === 1 && symbolCounts[secondarySymbol] === 1 && symbolCounts[this.ursoSymbol] === 1) {
+            multiplier = 3.0; name = "Sequência Principal, Secundário e Urso"; description = "Um de cada: principal, secundário e urso."; animationHint = 'medium-win';
+        } else if (symbolCounts[principalSymbol] === 1 && symbolCounts[this.ursoSymbol] === 2) {
+            multiplier = 5.0; name = "Principal com Par de Ursos"; description = "Um símbolo principal e dois ursos."; animationHint = 'big-win';
+        } else if (symbolCounts[secondarySymbol] === 1 && symbolCounts[this.ursoSymbol] === 2) {
+            multiplier = 3.5; name = "Secundário com Par de Ursos"; description = "Um símbolo secundário e dois ursos."; animationHint = 'big-win';
+        } else if (symbolCounts[principalSymbol] === 2 && outroSymbols.some(sym => (symbolCounts[sym] || 0) === 1)) {
+            multiplier = 3.5; name = "Par de Principal com Outro"; description = "Dois símbolos principais e um outro símbolo."; animationHint = 'big-win';
+        } else if (symbolCounts[principalSymbol] === 2 && symbolCounts[this.ursoSymbol] === 1) {
+            multiplier = 8.0; name = "Par de Principal com Urso"; description = "Dois símbolos principais e um urso."; animationHint = 'big-win';
+        } else if (symbolCounts[principalSymbol] === 2 && symbolCounts[secondarySymbol] === 1) {
+            multiplier = 6.0; name = "Par de Principal com Secundário"; description = "Dois símbolos principais e um secundário."; animationHint = 'big-win';
+        } else if (symbolCounts[principalSymbol] === 3) {
+            multiplier = 10.0; name = "Trinca do Principal"; description = "Três símbolos principais iguais!"; animationHint = 'jackpot';
+        } else if (symbolCounts[secondarySymbol] === 2 && outroSymbols.some(sym => (symbolCounts[sym] || 0) === 1)) {
+            multiplier = 2.5; name = "Par de Secundário com Outro"; description = "Dois símbolos secundários e um outro símbolo."; animationHint = 'medium-win';
+        } else if (symbolCounts[secondarySymbol] === 2 && symbolCounts[this.ursoSymbol] === 1) {
+            multiplier = 4.0; name = "Par de Secundário com Urso"; description = "Dois símbolos secundários e um urso."; animationHint = 'big-win';
+        } else if (symbolCounts[secondarySymbol] === 2 && symbolCounts[principalSymbol] === 1) {
+            multiplier = 3.0; name = "Par de Secundário com Principal"; description = "Dois símbolos secundários e um principal."; animationHint = 'medium-win';
+        } else if (symbolCounts[secondarySymbol] === 3) {
+            multiplier = 6.0; name = "Trinca do Secundário"; description = "Três símbolos secundários iguais!"; animationHint = 'big-win';
+        }
 
-
-        return bet.betAmount * payoutMultiplier;
+        return {
+            payout: betAmount * multiplier,
+            multiplier: multiplier,
+            name: name,
+            description: description,
+            animationHint: animationHint,
+        };
     }
 
-
+    // Método finalizer adaptado para usar o novo calculatePayout
     async finalizeCacaNiquelRound(roundId: number, transactionHost?: any): Promise<CacaNiquelRound> {
         const transaction = transactionHost ? transactionHost : await this.sequelize.transaction();
         try {
@@ -243,31 +309,27 @@ export class CacaNiquelService {
                 transaction
             });
 
-            if (!cacaNiquelRound) {
-                throw new NotFoundException('Rodada de caça-níquel não encontrada.');
-            }
-            if (cacaNiquelRound.finished) {
-                throw new ConflictException('Esta rodada de caça-níquel já foi finalizada.');
-            }
+            if (!cacaNiquelRound) throw new NotFoundException('Rodada de caça-níquel não encontrada.');
+            if (cacaNiquelRound.finished) throw new ConflictException('Esta rodada de caça-níquel já foi finalizada.');
 
-            const bets = cacaNiquelRound.bets; // ✅ Sem alteração aqui, bets já está sendo atribuído corretamente
-            if (bets) { // ✅ Adicionada verificação para bets
+            const bets = cacaNiquelRound.bets;
+            if (bets) {
                 for (const bet of bets) {
-                    const payout = this.calculatePayout(bet);
-                    if (payout > 0) {
+                    const payoutInfo = this.calculatePayout(bet); // Usa a função modificada
+                    if (payoutInfo.payout > 0) {
                         bet.win = true;
-                        bet.payout = payout;
+                        bet.payout = payoutInfo.payout; // Pega o valor do objeto retornado
                         const winnerUser = await this.userModel.findByPk(bet.userId, { transaction });
-                        if (!winnerUser) {
-                            throw new NotFoundException('Usuário vencedor não encontrado.');
-                        }
-                        await winnerUser.update({ balance: winnerUser.balance + payout }, { transaction });
-                        this.logger.log(`Usuário ${winnerUser.id} ganhou R$${payout.toFixed(2)} na rodada ${cacaNiquelRound.id} com aposta de R$${bet.betAmount.toFixed(2)}`);
+                        if (!winnerUser) throw new NotFoundException('Usuário vencedor não encontrado.');
+                        
+                        // O saldo já foi atualizado no `buyBet`, aqui seria redundante
+                        // await winnerUser.update({ balance: winnerUser.balance + payoutInfo.payout }, { transaction });
+                        
+                        this.logger.log(`Usuário ${winnerUser.id} ganhou R$${payoutInfo.payout.toFixed(2)} na rodada ${cacaNiquelRound.id} com aposta de R$${bet.betAmount.toFixed(2)}`);
                     }
                     await bet.save({ transaction });
                 }
             }
-
 
             cacaNiquelRound.finished = true;
             await cacaNiquelRound.save({ transaction });
@@ -287,6 +349,32 @@ export class CacaNiquelService {
     }
 
 
+    /**
+     * NOVO MÉTODO: Retorna a tabela de pagamentos completa para o frontend.
+     */
+    getPayTable(): any[] {
+        this.logger.debug('Retornando a tabela de pagamentos completa.');
+        return [
+            { id: 1, name: "Trinca do Principal", multiplier: 10.0, description: "Três símbolos principais iguais!", example: ['principal', 'principal', 'principal'], animationHint: 'jackpot' },
+            { id: 2, name: "Par de Principal com Urso", multiplier: 8.0, description: "Dois símbolos principais e um urso.", example: ['principal', 'principal', 'urso'], animationHint: 'big-win' },
+            { id: 3, name: "Trinca do Secundário", multiplier: 6.0, description: "Três símbolos secundários iguais!", example: ['secondary', 'secondary', 'secondary'], animationHint: 'big-win' },
+            { id: 4, name: "Par de Principal com Secundário", multiplier: 6.0, description: "Dois símbolos principais e um secundário.", example: ['principal', 'principal', 'secondary'], animationHint: 'big-win' },
+            { id: 5, name: "Principal com Par de Ursos", multiplier: 5.0, description: "Um símbolo principal e dois ursos.", example: ['principal', 'urso', 'urso'], animationHint: 'big-win' },
+            { id: 6, name: "Par de Secundário com Urso", multiplier: 4.0, description: "Dois símbolos secundários e um urso.", example: ['secondary', 'secondary', 'urso'], animationHint: 'big-win' },
+            { id: 7, name: "Secundário com Par de Ursos", multiplier: 3.5, description: "Um símbolo secundário e dois ursos.", example: ['secondary', 'urso', 'urso'], animationHint: 'big-win' },
+            { id: 8, name: "Par de Principal com Outro", multiplier: 3.5, description: "Dois símbolos principais e um outro símbolo.", example: ['principal', 'principal', 'other'], animationHint: 'big-win' },
+            { id: 9, name: "Par de Secundário com Principal", multiplier: 3.0, description: "Dois símbolos secundários e um principal.", example: ['secondary', 'secondary', 'principal'], animationHint: 'medium-win' },
+            { id: 10, name: "Sequência Principal, Secundário e Urso", multiplier: 3.0, description: "Um de cada: principal, secundário e urso.", example: ['principal', 'secondary', 'urso'], animationHint: 'medium-win' },
+            { id: 11, name: "Principal e Secundário", multiplier: 2.5, description: "Um símbolo principal e um secundário.", example: ['principal', 'secondary'], animationHint: 'medium-win' },
+            { id: 12, name: "Par de Secundário com Outro", multiplier: 2.5, description: "Dois símbolos secundários e um outro símbolo.", example: ['secondary', 'secondary', 'other'], animationHint: 'medium-win' },
+            { id: 13, name: "Principal e Urso", multiplier: 2.0, description: "Um símbolo principal e um urso.", example: ['principal', 'urso'], animationHint: 'medium-win' },
+            { id: 14, name: "Secundário e Urso", multiplier: 1.8, description: "Um símbolo secundário e um urso.", example: ['secondary', 'urso'], animationHint: 'medium-win' },
+            { id: 15, name: "Par de Outros com Principal", multiplier: 1.5, description: "Um símbolo principal e um par de outros símbolos.", example: ['principal', 'other', 'other'], animationHint: 'small-win' },
+            { id: 16, name: "Par de Outros com Secundário", multiplier: 1.2, description: "Um símbolo secundário e um par de outros símbolos.", example: ['secondary', 'other', 'other'], animationHint: 'small-win' },
+        ];
+    }
+    
+    // (O resto dos métodos, como getCacaNiquelRoundsWithDetails, continuam os mesmos)
     async getCacaNiquelRoundsWithDetails(): Promise<any[]> {
         return this.cacaNiquelRoundModel.findAll({
             include: [
@@ -387,4 +475,5 @@ export class CacaNiquelService {
             order: [['createdAt', 'DESC']],
         });
     }
+
 }

@@ -38,6 +38,12 @@ export class CacaNiquelController {
         return await this.cacaNiquelService.finalizeCacaNiquelRound(roundId);
     }
 
+    @Get('pay-table')
+    getPayTable() {
+        this.logger.log('Buscando a tabela de pagamentos do caça-níquel...');
+        return this.cacaNiquelService.getPayTable();
+    }
+
     @UseGuards(AuthGuard('jwt'))
     @Get('my/rounds')
     async getCacaNiquelRoundsPlayedByUser(@Request() req) {
