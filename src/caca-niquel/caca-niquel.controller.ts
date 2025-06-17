@@ -25,17 +25,30 @@ export class CacaNiquelController {
         @Body('betAmount', ParseIntPipe) betAmount: number,
         @Body('principalSymbol') principalSymbol: string,
         @Body('secondarySymbol') secondarySymbol: string,
+        // --- ADIÇÃO IMPORTANTE AQUI ---
+        // Campo opcional para o palpite do Jackpot, conforme a documentação.
+        @Body('palpiteJackpot', new ParseIntPipe({ optional: true })) palpiteJackpot?: number,
     ) {
         const userId = req.user.id;
-        this.logger.log(`Usuário ${userId} comprando aposta para rodada ${roundId} com valor ${betAmount}...`);
-        return await this.cacaNiquelService.buyBet(userId, roundId, { betAmount, principalSymbol, secondarySymbol });
+        this.logger.log(`Usuário ${userId} comprando aposta para rodada ${roundId} com valor ${betAmount} e palpite de jackpot ${palpiteJackpot || 'N/A'}...`);
+        
+        // Passa o objeto completo para o serviço, incluindo o novo palpite.
+        return await this.cacaNiquelService.buyBet(userId, roundId, { 
+            betAmount, 
+            principalSymbol, 
+            secondarySymbol,
+            palpiteJackpot // palpiteJackpot será undefined se não for enviado, o que é ok.
+        });
     }
 
-    @Post(':roundId/finalize') // Endpoint manual para testes/admin - Remova @UseGuards(AuthGuard('jwt')) se for para uso interno
+    @Post(':roundId/finalize') // Endpoint manual para testes/admin
     @HttpCode(HttpStatus.OK)
     async finalizeCacaNiquelRound(@Param('roundId', ParseIntPipe) roundId: number) {
-        this.logger.log(`Finalizando rodada de caça-níquel ${roundId} (endpoint manual)...`);
-        return await this.cacaNiquelService.finalizeCacaNiquelRound(roundId);
+        this.logger.warn(`Endpoint de finalização manual chamado para a rodada ${roundId}. Isso não é mais necessário no fluxo normal do jogo.`);
+        // Este método foi mantido para fins de teste, mas a lógica de finalização agora está no `buyBet`.
+        // A implementação no service para este método pode ser removida ou adaptada no futuro.
+        // return await this.cacaNiquelService.finalizeCacaNiquelRound(roundId);
+        return { message: "Endpoint de finalização manual. A finalização agora é automática no 'buy-bet'." };
     }
 
     @Get('pay-table')
